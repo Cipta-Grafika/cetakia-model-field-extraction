@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 try:
     from .inference_v2 import ReceiptFieldExtractorV2
@@ -18,6 +19,21 @@ API_KEY = os.getenv("MODEL_API_KEY", "")
 app = FastAPI(
     title="Cetakia Receipt Extraction API V2",
     version="2.0.0"
+)
+
+# Allow CORS for browser-based clients (configure via CORS_ALLOW_ORIGINS if needed).
+cors_allow_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_allow_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 extractor = ReceiptFieldExtractorV2()
