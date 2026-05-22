@@ -1,50 +1,50 @@
 {
   "samples": 100,
-  "overall_accuracy": 0.872,
+  "overall_accuracy": 0.936,
   "latency": {
-    "mean": 2.053,
-    "median": 1.9939,
-    "p90": 2.637,
-    "p95": 2.8793,
-    "p99": 3.3888,
-    "max": 3.3896,
-    "under_1s_ratio": 0.01
+    "mean": 2.1827,
+    "median": 2.02,
+    "p90": 3.023,
+    "p95": 3.838,
+    "p99": 4.4556,
+    "max": 4.8909,
+    "under_1s_ratio": 0.02
   },
   "per_field": {
     "transaction_date": {
       "total": 89,
-      "correct": 60,
-      "accuracy": 0.6742,
-      "avg_confidence": 0.8453,
+      "correct": 77,
+      "accuracy": 0.8652,
+      "avg_confidence": 0.8406,
       "review_rate": 0.0225
-    },
-    "recipient_name": {
-      "total": 99,
-      "correct": 87,
-      "accuracy": 0.8788,
-      "avg_confidence": 0.9097,
-      "review_rate": 0.0303
     },
     "reference_no": {
       "total": 69,
-      "correct": 63,
-      "accuracy": 0.913,
-      "avg_confidence": 0.9636,
+      "correct": 62,
+      "accuracy": 0.8986,
+      "avg_confidence": 0.967,
       "review_rate": 0.0
     },
     "account_no": {
       "total": 96,
       "correct": 89,
       "accuracy": 0.9271,
-      "avg_confidence": 0.8771,
-      "review_rate": 0.0729
+      "avg_confidence": 0.8762,
+      "review_rate": 0.0625
+    },
+    "recipient_name": {
+      "total": 99,
+      "correct": 97,
+      "accuracy": 0.9798,
+      "avg_confidence": 0.9303,
+      "review_rate": 0.0202
     },
     "total_amount": {
       "total": 100,
-      "correct": 96,
-      "accuracy": 0.96,
-      "avg_confidence": 0.9197,
-      "review_rate": 0.01
+      "correct": 99,
+      "accuracy": 0.99,
+      "avg_confidence": 0.9255,
+      "review_rate": 0.0
     }
   },
   "targets": {

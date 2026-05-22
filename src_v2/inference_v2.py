@@ -112,6 +112,24 @@ class ReceiptFieldExtractorV2:
         if image is None:
             raise ValueError(f"Image gagal dibaca: {image_path}")
 
+        return self._predict_loaded_image(image=image, return_meta=return_meta, start_time=start)
+
+    def predict_array(self, image, return_meta: bool = False):
+        """
+        Inference langsung dari numpy image untuk menghindari I/O file tambahan.
+        """
+        start = time.perf_counter()
+
+        if image is None:
+            raise ValueError("Image numpy kosong.")
+
+        if len(image.shape) == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        return self._predict_loaded_image(image=image, return_meta=return_meta, start_time=start)
+
+    def _predict_loaded_image(self, image, return_meta: bool, start_time: float):
+
         image, _ = resize_for_speed(image, max_width=OCR_MAX_WIDTH)
 
         # Single-pass OCR untuk menghindari bottleneck ROI OCR per-field.
@@ -190,7 +208,7 @@ class ReceiptFieldExtractorV2:
         self.apply_recipient_from_account_map(result, confidence, field_source)
         needs_review["recipient_name"] = confidence["recipient_name"] < FIELD_CONFIDENCE_THRESHOLD["recipient_name"]
 
-        latency = time.perf_counter() - start
+        latency = time.perf_counter() - start_time
 
         if return_meta:
             return {

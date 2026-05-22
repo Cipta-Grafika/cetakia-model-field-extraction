@@ -4,9 +4,19 @@ import cv2
 from rapidocr_onnxruntime import RapidOCR
 
 try:
-    from .config import OCR_CPU_THREADS, OCR_DET_LIMIT_SIDE_LEN, OCR_DET_LIMIT_TYPE
+    from .config import (
+        OCR_CPU_THREADS,
+        OCR_DET_LIMIT_SIDE_LEN,
+        OCR_DET_LIMIT_TYPE,
+        OCR_REC_BATCH_NUM,
+    )
 except ImportError:
-    from config import OCR_CPU_THREADS, OCR_DET_LIMIT_SIDE_LEN, OCR_DET_LIMIT_TYPE
+    from config import (
+        OCR_CPU_THREADS,
+        OCR_DET_LIMIT_SIDE_LEN,
+        OCR_DET_LIMIT_TYPE,
+        OCR_REC_BATCH_NUM,
+    )
 
 
 class ReceiptOCREngine:
@@ -18,15 +28,22 @@ class ReceiptOCREngine:
     2. ROI OCR untuk mempercepat known template
     """
 
-    def __init__(self, det_limit_side_len=None, det_limit_type=None):
+    def __init__(
+        self,
+        det_limit_side_len=None,
+        det_limit_type=None,
+        rec_batch_num=None,
+        cpu_threads=None,
+    ):
         # Thread count rendah lebih stabil/cepat untuk workload OCR per-request.
-        cpu_threads = str(max(1, int(OCR_CPU_THREADS)))
-        os.environ["OMP_NUM_THREADS"] = cpu_threads
-        os.environ["OPENBLAS_NUM_THREADS"] = cpu_threads
-        os.environ["MKL_NUM_THREADS"] = cpu_threads
+        thread_count = str(max(1, int(OCR_CPU_THREADS if cpu_threads is None else cpu_threads)))
+        os.environ["OMP_NUM_THREADS"] = thread_count
+        os.environ["OPENBLAS_NUM_THREADS"] = thread_count
+        os.environ["MKL_NUM_THREADS"] = thread_count
 
         side_len = OCR_DET_LIMIT_SIDE_LEN if det_limit_side_len is None else det_limit_side_len
         limit_type = OCR_DET_LIMIT_TYPE if det_limit_type is None else det_limit_type
+        rec_batch = OCR_REC_BATCH_NUM if rec_batch_num is None else rec_batch_num
 
         # use_angle_cls=False karena receipt mayoritas tegak.
         # Ini mengikuti insight Best Model V1.
@@ -35,6 +52,8 @@ class ReceiptOCREngine:
             det_limit_side_len=side_len,
             det_limit_type=limit_type,
             det_model_path=None,
+            rec_rec_batch_num=rec_batch,
+            rec_model_path=None,
         )
 
     def run_ocr(self, image):

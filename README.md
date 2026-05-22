@@ -206,7 +206,7 @@ Ekstraksi:
 
 ```bash
 curl -X POST "http://localhost:8000/extract" \
-  -H "X-API-Key: 0eEQC65XNrdrVCGEEs7IPrLFLEoDYssx" \
+  -H "X-API-Key: YOUR-API-KEY" \
   -F "file=@data/images/1.jpg"
 ```
 

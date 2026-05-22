@@ -1,22 +1,19 @@
-from pathlib import Path
-import uuid
-import shutil
 import os
 import secrets
 import numpy as np
 from typing import Optional
+from pathlib import Path
+import cv2
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Request
 
 try:
-    from .config import RUNTIME_DIR
     from .inference_v2 import ReceiptFieldExtractorV2
 except ImportError:
-    from config import RUNTIME_DIR
     from inference_v2 import ReceiptFieldExtractorV2
 
 
-API_KEY = os.getenv("MODEL_API_KEY", "0eEQC65XNrdrVCGEEs7IPrLFLEoDYssx")
+API_KEY = os.getenv("MODEL_API_KEY", "")
 
 app = FastAPI(
     title="Cetakia Receipt Extraction API V2",
@@ -42,9 +39,6 @@ def _warmup_extractor():
 
 
 _warmup_extractor()
-
-UPLOAD_DIR = RUNTIME_DIR / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 RAW_CONTENT_TYPE_TO_EXT = {
@@ -94,12 +88,12 @@ async def extract_receipt(
                     status_code=400,
                     detail="Format file tidak didukung. Gunakan jpg, jpeg, png, atau webp."
                 )
-
-            filename = f"{uuid.uuid4().hex}{ext}"
-            saved_path = UPLOAD_DIR / filename
-
-            with saved_path.open("wb") as buffer:
-                shutil.copyfileobj(upload.file, buffer)
+            raw_bytes = await upload.read()
+            if not raw_bytes:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Body gambar kosong."
+                )
         else:
             raw_content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
             ext = RAW_CONTENT_TYPE_TO_EXT.get(raw_content_type)
@@ -122,14 +116,15 @@ async def extract_receipt(
                     detail="Body gambar kosong."
                 )
 
-            filename = f"{uuid.uuid4().hex}{ext}"
-            saved_path = UPLOAD_DIR / filename
+        image_np = cv2.imdecode(np.frombuffer(raw_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image_np is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Gambar tidak valid atau gagal di-decode."
+            )
 
-            with saved_path.open("wb") as buffer:
-                buffer.write(raw_bytes)
-
-        result = extractor.predict(
-            image_path=str(saved_path),
+        result = extractor.predict_array(
+            image=image_np,
             return_meta=False
         )
 
