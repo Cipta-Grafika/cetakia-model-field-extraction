@@ -35,6 +35,14 @@ TEMPLATE_RULES = {
         "brand": ["dana"],
         "context": ["id transaksi", "total bayar", "akun bank"],
     },
+    "shopeepay": {
+        "brand": ["shopeepay"],
+        "context": ["order sn", "rincian referensi", "waktu selesai", "kirim ke"],
+    },
+    "gopay": {
+        "brand": ["gopay"],
+        "context": ["rincian transaksi", "id transaksi", "order id", "gopay topup", "gopay top up"],
+    },
 }
 
 
@@ -99,6 +107,11 @@ class TemplateRouter:
             brand_score = len(brand_matches) / max(len(brand_anchors), 1)
             ctx_score = len(ctx_matches) / max(len(ctx_anchors), 1)
             score = (0.7 * brand_score) + (0.3 * ctx_score)
+
+            # "dana" sebagai token tunggal rawan false-positive pada receipt lain
+            # (contoh "Sumber Dana" di ShopeePay), sehingga perlu context pendukung.
+            if template_name == "dana" and not ctx_matches:
+                score *= 0.35
 
             if score > best_score:
                 best_template = template_name

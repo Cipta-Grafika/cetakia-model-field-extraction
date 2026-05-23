@@ -6,6 +6,7 @@ import re
 import time
 import cv2
 import joblib
+import numpy as np
 from dateutil import parser as date_parser
 
 try:
@@ -82,6 +83,20 @@ class ReceiptFieldExtractorV2:
 
             if model_path.exists():
                 self.models[field] = joblib.load(model_path)
+
+        self._warmup_model_reranker()
+
+    def _warmup_model_reranker(self):
+        """
+        Warm-up predict_proba agar latency request awal lebih stabil.
+        """
+        for model in self.models.values():
+            try:
+                n_features = int(getattr(model, "n_features_in_", 25))
+                dummy = np.zeros((1, n_features), dtype=np.float32)
+                _ = model.predict_proba(dummy)
+            except Exception:
+                continue
 
     def empty_response(self):
         return {
@@ -165,6 +180,10 @@ class ReceiptFieldExtractorV2:
         for field in FIELDS:
             rule_score = float(rule_outputs.get(field, {}).get("confidence", 0.0))
             rule_value = rule_outputs.get(field, {}).get("value")
+            # Value None dengan confidence tinggi dianggap explicit-null yang valid,
+            # sehingga tidak perlu model fallback.
+            if (rule_value is None) and (rule_score >= 0.95):
+                continue
             if rule_value is None or rule_score < 0.68:
                 need_model_fields.append(field)
 
@@ -304,9 +323,10 @@ class ReceiptFieldExtractorV2:
         has_model = model_value is not None
         model_valid = self.is_model_value_valid(field, model_value)
 
-        # Untuk kasus "No. Referensi" yang eksplisit kosong, parser memberi
-        # confidence tinggi meskipun value None. Ini harus dipertahankan sebagai null.
-        if field == "reference_no" and (rule_value is None) and (rule_score >= 0.95):
+        # Untuk kasus explicit-null (mis. reference/account/name pada template
+        # tertentu), parser bisa memberi confidence tinggi meskipun value None.
+        # Value ini harus dipertahankan dan tidak diganti model fallback.
+        if (rule_value is None) and (rule_score >= 0.95):
             return None, rule_score, "rules_v1_explicit_null"
 
         if has_rule and rule_score >= 0.62:
@@ -367,6 +387,11 @@ class ReceiptFieldExtractorV2:
         if not candidates:
             return None, 0.0
 
+        valid_candidates = [c for c in candidates if self.is_model_value_valid(field, c.get("value"))]
+        if not valid_candidates:
+            return None, 0.0
+
+        candidates = valid_candidates
         model = self.models.get(field)
 
         # Fallback jika model field belum ada.
@@ -464,7 +489,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "2833.jpg"
+    sample_image = IMAGE_DIR / "2357.jpg"
 
     output = extractor.predict(
         str(sample_image),

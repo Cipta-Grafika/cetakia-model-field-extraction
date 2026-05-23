@@ -695,6 +695,10 @@ class RuleFieldParserV1:
         if not raw:
             return None
 
+        # GoPay topup hashtag dipertahankan apa adanya.
+        if raw.startswith("#"):
+            return raw
+
         key = self.reference_key(raw)
         if not key:
             return raw
@@ -836,6 +840,130 @@ class RuleFieldParserV1:
         has_ke = any(re.sub(r"[^a-z]", "", n) == "ke" for n in norms)
         has_dari = any(re.sub(r"[^a-z]", "", n) == "dari" for n in norms)
         return has_seabank and has_ke and has_dari
+
+    def _is_shopeepay_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        has_brand = any("shopeepay" in n for n in norms)
+        has_order_sn = any(("order sn" in n) or ("ordersn" in re.sub(r"[^a-z0-9]", "", n)) for n in norms)
+        has_ref_section = any(("rincian referensi" in n) or ("rincianreferensi" in re.sub(r"[^a-z0-9]", "", n)) for n in norms)
+        return has_brand and (has_order_sn or has_ref_section)
+
+    def _has_shopeepay_receiver_context(self, lines: List[Dict]) -> bool:
+        def is_receiver_anchor(text: str) -> bool:
+            norm = normalize_text(text)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            if re.search(r"(^|\s)kirim\s+ke(\s|$)", norm):
+                return True
+            if re.search(r"(^|\s)transfer\s+ke(\s|$)", norm):
+                return True
+            if re.search(r"(?<!di)kirimke", compact):
+                return True
+            if re.search(r"(?<!di)transferke", compact):
+                return True
+            return False
+
+        for line in lines:
+            norm = normalize_text(line.get("text", ""))
+            if is_receiver_anchor(line.get("text", "")):
+                return True
+            # "Transfer Ke" section pada layout minim detail biasanya heading
+            # tanpa nomor rekening/nama penerima yang jelas.
+            if ("transfer ke" in norm or "kirim ke" in norm) and re.search(r"(bca|bri|bni|mandiri|seabank)\s*[:\-]?\*?\d{4,16}", line.get("text", ""), flags=re.IGNORECASE):
+                return True
+        return False
+
+    def _is_gopay_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        has_brand = any("gopay" in n for n in norms)
+        has_context = any(
+            ("rincian transaksi" in n)
+            or ("id transaksi" in n)
+            or ("order id" in n)
+            or ("gopay topup" in n)
+            or ("gopay top up" in n)
+            for n in norms
+        )
+        return has_brand and has_context
+
+    def _extract_shopeepay_order_sn_reference(self, ordered_lines: List[Dict]) -> Optional[str]:
+        stop_hints = (
+            "download",
+            "google play",
+            "appstore",
+            "npwp",
+            "waktu",
+            "jumlah",
+            "biaya",
+            "rincian transaksi",
+            "metode",
+            "status",
+        )
+
+        for idx, line in enumerate(ordered_lines):
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            compact_norm = re.sub(r"[^a-z0-9]", "", norm)
+            if ("order sn" not in norm) and ("ordersn" not in compact_norm):
+                continue
+
+            parts: List[str] = []
+            tail = re.sub(r"(?i)^.*?order\s*sn\s*[:\-]?\s*", "", raw)
+            for token in re.findall(r"[A-Za-z0-9]{5,}", tail):
+                token_norm = token.lower()
+                if token_norm in ("order", "ordersn", "sn"):
+                    continue
+                if not re.search(r"\d", token):
+                    continue
+                parts.append(token)
+
+            for j in range(idx + 1, min(idx + 3, len(ordered_lines))):
+                nxt = str(ordered_lines[j].get("text", ""))
+                nxt_norm = normalize_text(nxt)
+                if any(h in nxt_norm for h in stop_hints):
+                    break
+                for token in re.findall(r"[A-Za-z0-9]{5,}", nxt):
+                    if not re.search(r"\d", token):
+                        continue
+                    parts.append(token)
+
+            if not parts:
+                continue
+
+            candidate = re.sub(r"[^A-Za-z0-9]", "", "".join(parts))
+            if len(candidate) < 16:
+                continue
+            if not re.search(r"[A-Za-z]", candidate):
+                continue
+            if not re.search(r"\d", candidate):
+                continue
+            return candidate
+
+        return None
+
+    def _extract_gopay_hashtag_reference(self, ordered_lines: List[Dict]) -> Optional[str]:
+        for idx, line in enumerate(ordered_lines):
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            if "#" not in raw and "#" not in norm:
+                continue
+
+            match = re.search(r"#\s*([A-Za-z0-9][A-Za-z0-9_-]{5,})", raw)
+            if not match:
+                continue
+
+            token = re.sub(r"[^A-Za-z0-9_-]", "", match.group(1))
+            if len(token) < 8:
+                # OCR bisa memotong token hashtag ke baris bawah.
+                if idx + 1 < len(ordered_lines):
+                    nxt = str(ordered_lines[idx + 1].get("text", ""))
+                    nxt_token = "".join(re.findall(r"[A-Za-z0-9]{4,}", nxt))
+                    token = f"{token}{nxt_token}"
+
+            token = re.sub(r"[^A-Za-z0-9_-]", "", token)
+            if len(token) >= 8:
+                return f"#{token}"
+
+        return None
 
     def _match_name_lexicon(self, name: str) -> Optional[str]:
         cleaned = re.sub(r"[^A-Za-z ]", " ", str(name))
@@ -1104,10 +1232,18 @@ class RuleFieldParserV1:
         if "*" in raw and raw.count("*") >= 2:
             return False
 
+        # Masked rekening seperti "BCA:*2201" bukan reference number.
+        if "*" in raw and len(normalize_number(raw)) <= 6:
+            return False
+        if re.match(r"(?i)^(?:[a-z]{2,12}:)?\*+\d{3,16}$", raw):
+            return False
+
         if is_datetime_like(raw):
             return False
 
         if re.search(r"(?i)\b(rp|idr)\b", raw):
+            return False
+        if re.search(r"(?i)^(rp|idr)\s*[:.]?\s*\d", raw):
             return False
 
         if is_amount_candidate(raw) and not bool(re.search(r"[A-Za-z]", raw)):
@@ -1157,6 +1293,20 @@ class RuleFieldParserV1:
     def _extract_reference(self, lines: List[Dict], template_name: Optional[str]) -> Tuple[Optional[str], float]:
         ordered = self._sorted_lines(lines)
         allow_bifast_tail = template_name != "livin_mandiri"
+
+        # ShopeePay: reference utama berada di "Order SN", sering split multi-line.
+        if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
+            order_sn = self._extract_shopeepay_order_sn_reference(ordered)
+            if order_sn:
+                return order_sn, 0.99
+            # Pada varian ShopeePay ringkas, reference memang tidak tersedia.
+            return None, 0.99
+
+        # GoPay Top Up: gunakan nilai kutipan bertanda '#'.
+        if self._is_gopay_layout(ordered) or template_name == "gopay":
+            hashtag_ref = self._extract_gopay_hashtag_reference(ordered)
+            if hashtag_ref:
+                return hashtag_ref, 0.99
 
         # DANA special case: ID transaksi sering split multi-line.
         if self._is_dana_layout(ordered) or template_name == "dana":
@@ -1336,6 +1486,69 @@ class RuleFieldParserV1:
     def _extract_account(self, lines: List[Dict], template_name: Optional[str]) -> Tuple[Optional[str], float]:
         ordered = self._sorted_lines(lines)
 
+        if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
+            # ShopeePay varian ringkas/top-up tidak selalu menampilkan rekening
+            # tujuan. Jika konteks penerima tidak ada, paksa null.
+            if not self._has_shopeepay_receiver_context(ordered):
+                return None, 0.99
+
+            for idx, line in enumerate(ordered):
+                raw = str(line.get("text", ""))
+                norm = normalize_text(raw)
+                compact = re.sub(r"[^a-z0-9]", "", norm)
+                is_receiver_anchor = (
+                    bool(re.search(r"(^|\s)kirim\s+ke(\s|$)", norm))
+                    or bool(re.search(r"(^|\s)transfer\s+ke(\s|$)", norm))
+                    or bool(re.search(r"(?<!di)kirimke", compact))
+                    or bool(re.search(r"(?<!di)transferke", compact))
+                )
+                if not is_receiver_anchor:
+                    continue
+
+                for j in range(idx, min(idx + 3, len(ordered))):
+                    cand = str(ordered[j].get("text", ""))
+                    if not re.search(r"(?i)(bca|bri|bni|mandiri|seabank|cimb|bsi)\s*[:\-]?\*?\d{6,16}", cand):
+                        continue
+                    digits = normalize_number(cand)
+                    if 8 <= len(digits) <= 16:
+                        return digits, 0.9
+
+        if self._is_gopay_layout(ordered) or template_name == "gopay":
+            # GoPay receipt umumnya tidak memuat rekening penerima eksplisit.
+            # Hindari over-extract dari ID transaksi.
+            strong_account_anchors = (
+                "rekening penerima",
+                "nomor rekening",
+                "no rekening",
+                "account number",
+                "destination account",
+                "rekening tujuan",
+            )
+            for line in ordered:
+                raw = str(line.get("text", ""))
+                norm = normalize_text(raw)
+                if not any(anchor in norm for anchor in strong_account_anchors):
+                    continue
+                digits = normalize_number(raw)
+                if 8 <= len(digits) <= 16:
+                    return digits, 0.9
+
+            # Sebagian receipt GoPay menampilkan rekening tujuan dalam satu baris
+            # seperti "BCA7425252836" tanpa label rekening.
+            has_transfer_context = any(
+                any(k in normalize_text(str(l.get("text", ""))) for k in ("transferke", "ditransferke", "kirimke", "kepenerima"))
+                for l in ordered
+            )
+            if has_transfer_context:
+                for line in ordered:
+                    raw = str(line.get("text", ""))
+                    if not re.search(r"(?i)(bca|bri|bni|mandiri|seabank|cimb|bsi)\s*[:\-]?\*?\d{6,16}", raw):
+                        continue
+                    digits = normalize_number(raw)
+                    if 8 <= len(digits) <= 16:
+                        return digits, 0.88
+            return None, 0.99
+
         if self._is_blu_layout(ordered) or template_name == "blu_bca":
             for line in ordered:
                 raw = str(line.get("text", ""))
@@ -1447,6 +1660,80 @@ class RuleFieldParserV1:
             idx for idx, line in enumerate(ordered)
             if 8 <= len(normalize_number(line.get("text", ""))) <= 16
         ]
+
+        if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
+            # Pada ShopeePay minim detail (tanpa konteks "Kirim Ke"), nama
+            # penerima tidak tersedia sehingga harus null.
+            if not self._has_shopeepay_receiver_context(ordered):
+                return None, 0.99
+
+            for idx, line in enumerate(ordered):
+                raw = str(line.get("text", ""))
+                norm = normalize_text(raw)
+                compact = re.sub(r"[^a-z0-9]", "", norm)
+                is_receiver_anchor = (
+                    bool(re.search(r"(^|\s)kirim\s+ke(\s|$)", norm))
+                    or bool(re.search(r"(^|\s)transfer\s+ke(\s|$)", norm))
+                    or bool(re.search(r"(?<!di)kirimke", compact))
+                    or bool(re.search(r"(?<!di)transferke", compact))
+                )
+                if not is_receiver_anchor:
+                    continue
+
+                inline = self._extract_name_inline(raw)
+                if inline and is_human_name_candidate(inline):
+                    return self._normalize_recipient_name_case(inline), 0.9
+
+                merged = re.search(
+                    r"(?i)(?:kirim|transfer)\s*ke\s*(?:[A-Za-z]{2,12}\s*[:\-]?\s*)?([A-Za-z][A-Za-z .'-]{4,60})",
+                    raw,
+                )
+                if merged:
+                    candidate = clean_name_text(merged.group(1))
+                    if is_human_name_candidate(candidate):
+                        return self._normalize_recipient_name_case(candidate), 0.9
+
+                for j in range(idx + 1, min(idx + 3, len(ordered))):
+                    candidate = clean_name_text(ordered[j].get("text", ""))
+                    if is_human_name_candidate(candidate):
+                        return self._normalize_recipient_name_case(candidate), 0.88
+
+        if self._is_gopay_layout(ordered) or template_name == "gopay":
+            # Untuk GoPay, ambil recipient hanya jika ada anchor penerima yang jelas.
+            strict_name_anchors = (
+                "nama penerima",
+                "recipient",
+                "beneficiary",
+                "transfer ke",
+                "kirim ke",
+                "tujuan transfer",
+                "ditransferke",
+                "transferke",
+                "kirimke",
+            )
+            for idx, line in enumerate(ordered):
+                raw = str(line.get("text", ""))
+                norm = normalize_text(raw)
+                if not any(anchor in norm for anchor in strict_name_anchors):
+                    continue
+
+                compact_raw = re.sub(r"\s+", "", raw)
+                merged = re.search(r"(?i)(?:di)?transferke([A-Za-z][A-Za-z .'-]{3,60})", compact_raw)
+                if merged:
+                    candidate = clean_name_text(merged.group(1))
+                    if is_human_name_candidate(candidate):
+                        return self._normalize_recipient_name_case(candidate), 0.9
+
+                inline = self._extract_name_inline(raw)
+                if inline and is_human_name_candidate(inline):
+                    return self._normalize_recipient_name_case(inline), 0.9
+
+                for j in range(idx + 1, min(idx + 3, len(ordered))):
+                    candidate = clean_name_text(ordered[j].get("text", ""))
+                    if is_human_name_candidate(candidate):
+                        return self._normalize_recipient_name_case(candidate), 0.88
+
+            return None, 0.99
 
         # blu layout: name biasanya di atas baris "BCA - xxxxx".
         if self._is_blu_layout(ordered) or template_name == "blu_bca":
