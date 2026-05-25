@@ -73,8 +73,13 @@ REFERENCE_ANCHOR_HINTS = (
     "rincian referensi",
     "detail referensi",
     "referensi",
+    "reference",
+    "transaction reference",
     "biz id",
     "nomor transaksi",
+    "no transaksi",
+    "no. transaksi",
+    "no.transaksi",
     "id transaksi",
     "ref blu",
 )
@@ -821,6 +826,51 @@ class RuleFieldParserV1:
 
         return matches
 
+    def _resolve_masked_name_with_lexicon(self, text: str) -> Optional[str]:
+        if not self.recipient_name_lexicon:
+            return None
+
+        cleaned = re.sub(r"[^A-Za-z ]", " ", str(text))
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned:
+            return None
+
+        tokens = [token.lower() for token in re.findall(r"[A-Za-z]{2,}", cleaned)]
+        if not tokens:
+            return None
+
+        compact = "".join(tokens)
+        best = None
+
+        for lex_name in self.recipient_name_lexicon.values():
+            lex_compact = re.sub(r"[^a-z]", "", str(lex_name).lower())
+            if not lex_compact:
+                continue
+
+            cursor = 0
+            coverage = 0
+            matched = True
+            for token in tokens:
+                pos = lex_compact.find(token, cursor)
+                if pos < 0:
+                    matched = False
+                    break
+                coverage += len(token)
+                cursor = pos + len(token)
+
+            if not matched:
+                continue
+
+            similarity = SequenceMatcher(None, compact, lex_compact).ratio()
+            score = (coverage / max(len(lex_compact), 1)) + (0.35 * similarity)
+            if best is None or score > best[0]:
+                best = (score, lex_name)
+
+        if best and best[0] >= 0.72:
+            return best[1]
+
+        return None
+
     def _is_dana_layout(self, lines: List[Dict]) -> bool:
         norms = [normalize_text(l.get("text", "")) for l in lines]
         has_dana = any(n == "dana" or "id dana" in n for n in norms)
@@ -1022,7 +1072,10 @@ class RuleFieldParserV1:
             "kirim uang",
             "nominal",
             "biaya",
+            "fee",
             "total",
+            "debit",
+            "debit amount",
             "message",
             "purpose",
             "instruction",
@@ -1057,7 +1110,7 @@ class RuleFieldParserV1:
 
     def _extract_reference_from_anchor_line(self, raw: str) -> Optional[str]:
         anchor_match = re.search(
-            r"(?i)(?:id\s*transaksi|idtransaksi|no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|reference\s*(?:id|no|number)|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)",
+            r"(?i)(?:id\s*transaksi|idtransaksi|no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|transaction\s*reference|reference\s*(?:id|no|number)?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)",
             raw,
         )
         if not anchor_match:
@@ -1219,6 +1272,8 @@ class RuleFieldParserV1:
             return False
 
         norm_hint = self._normalize_hint_text(original)
+        raw_alnum = re.sub(r"[^A-Za-z0-9]", "", raw)
+        raw_alnum_l = raw_alnum.lower()
 
         if self._is_reference_noise(original):
             return False
@@ -1226,7 +1281,7 @@ class RuleFieldParserV1:
         if re.match(r"(?i)^(ke|to)\d{8,16}$", raw):
             return False
 
-        if re.match(r"(?i)^(?:seabank|bankcentralasia|bankbca|bankbri|bankbni|bankmandiri|bca|bri|bni|mandiri){1,3}\d{8,16}$", raw):
+        if re.match(r"^(?:seabank|bankcentralasia|bankbca|bankbri|bankbni|bankmandiri|bca|bri|bni|mandiri){1,3}\d{8,16}$", raw_alnum_l):
             return False
 
         if "*" in raw and raw.count("*") >= 2:
@@ -1239,6 +1294,13 @@ class RuleFieldParserV1:
             return False
 
         if is_datetime_like(raw):
+            return False
+
+        if re.search(r"(?i)(?:rp|idr)\s*[-:.]?\s*\d{2,}", raw):
+            return False
+        if re.search(r"(?:rp|idr)\d{2,}", raw_alnum_l):
+            return False
+        if ("fee" in norm_hint) and re.search(r"\d", raw):
             return False
 
         if re.search(r"(?i)\b(rp|idr)\b", raw):
@@ -1408,7 +1470,7 @@ class RuleFieldParserV1:
                 # Jika anchor referensi ada tapi nilainya kosong ("-" / empty),
                 # jangan fallback ke field lain seperti rekening penerima.
                 anchor_tail = re.sub(
-                    r"(?i)^.*?(no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|reference\s*(?:id|no|number)|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)\s*",
+                    r"(?i)^.*?(no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|transaction\s*reference|reference(?:\s*(?:id|no|number))?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)\s*",
                     "",
                     raw,
                 )
@@ -1568,7 +1630,7 @@ class RuleFieldParserV1:
         if self._is_dana_layout(ordered) or template_name == "dana":
             for i, line in enumerate(ordered):
                 norm = normalize_text(line.get("text", ""))
-                if "akun bank" not in norm:
+                if ("akun bank" not in norm) and ("akun dana" not in norm):
                     continue
 
                 block = [line]
@@ -1660,6 +1722,28 @@ class RuleFieldParserV1:
             idx for idx, line in enumerate(ordered)
             if 8 <= len(normalize_number(line.get("text", ""))) <= 16
         ]
+
+        if self._is_dana_layout(ordered) or template_name == "dana":
+            for idx, line in enumerate(ordered):
+                norm = normalize_text(line.get("text", ""))
+                compact = re.sub(r"[^a-z0-9]", "", norm)
+                if ("detail penerima" not in norm) and ("detailpenerima" not in compact):
+                    continue
+
+                for j in range(idx, min(idx + 8, len(ordered) - 1)):
+                    label_norm = normalize_text(ordered[j].get("text", ""))
+                    label_compact = re.sub(r"[^a-z]", "", label_norm)
+                    if label_compact not in ("nama", "namapenerima", "penerima", "recipient"):
+                        continue
+
+                    raw_name = str(ordered[j + 1].get("text", ""))
+                    masked_lex = self._resolve_masked_name_with_lexicon(raw_name)
+                    if masked_lex:
+                        return self._normalize_recipient_name_case(masked_lex), 0.97
+
+                    candidate = clean_name_text(raw_name)
+                    if is_human_name_candidate(candidate):
+                        return self._normalize_recipient_name_case(candidate), 0.93
 
         if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
             # Pada ShopeePay minim detail (tanpa konteks "Kirim Ke"), nama

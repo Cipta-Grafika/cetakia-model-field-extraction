@@ -174,6 +174,17 @@ class ReceiptFieldExtractorV2:
                     "source": "rules_v1_raw_ocr_retry",
                 }
 
+        if self.should_retry_reference_with_raw_ocr(lines, rule_outputs, template_name):
+            raw_reference, raw_ref_score = self.retry_reference_with_raw_ocr(image)
+            current_ref_value = rule_outputs.get("reference_no", {}).get("value")
+            current_ref_score = float(rule_outputs.get("reference_no", {}).get("confidence", 0.0))
+            if raw_reference is not None and ((current_ref_value is None) or (raw_ref_score > current_ref_score)):
+                rule_outputs["reference_no"] = {
+                    "value": raw_reference,
+                    "confidence": raw_ref_score,
+                    "source": "rules_v1_reference_raw_retry",
+                }
+
         # Jalankan model fallback hanya untuk field rule yang lemah/kosong
         # agar latency lebih rendah.
         need_model_fields = []
@@ -273,6 +284,108 @@ class ReceiptFieldExtractorV2:
             confidence["recipient_name"] = max(current_score, 0.9)
             field_source["recipient_name"] = "account_recipient_map"
 
+    @staticmethod
+    def _looks_like_bank_account_reference(value):
+        if value is None:
+            return False
+        compact = re.sub(r"\s+", "", str(value))
+        alnum = re.sub(r"[^A-Za-z0-9]", "", compact).lower()
+        return bool(
+            re.fullmatch(
+                r"(?:seabank|bankcentralasia|bankbca|bankbri|bankbni|bankmandiri|bca|bri|bni|mandiri)\d{8,16}",
+                alnum,
+            )
+        )
+
+    def should_retry_reference_with_raw_ocr(self, lines, rule_outputs, template_name):
+        if template_name != "seabank":
+            return False
+
+        has_reference_anchor = any(
+            ("no transaksi" in normalize_text(str(line.get("text", ""))))
+            or ("notransaksi" in re.sub(r"[^a-z0-9]", "", normalize_text(str(line.get("text", "")))))
+            for line in lines
+        )
+        if not has_reference_anchor:
+            return False
+
+        current_ref = rule_outputs.get("reference_no", {}).get("value")
+        current_score = float(rule_outputs.get("reference_no", {}).get("confidence", 0.0))
+
+        if current_ref is None:
+            return True
+        if self._looks_like_bank_account_reference(current_ref):
+            return True
+
+        current_digits = normalize_number(str(current_ref))
+        if (len(current_digits) < 20) and (current_score < 0.95):
+            return True
+
+        return False
+
+    @staticmethod
+    def _collect_long_reference_digits(text):
+        candidates = []
+        groups = re.findall(r"\d{3,}", str(text))
+        if len(groups) >= 2:
+            merged = "".join(groups)
+            if merged.startswith("20") and 20 <= len(merged) <= 32:
+                candidates.append(merged)
+
+        for group in groups:
+            if group.startswith("20") and 20 <= len(group) <= 32:
+                candidates.append(group)
+
+        return candidates
+
+    def _extract_seabank_reference_from_lines(self, lines):
+        ordered = sorted(lines, key=lambda x: (float(x.get("cy", 0.0)), float(x.get("cx", 0.0))))
+        candidates = []
+
+        for idx, line in enumerate(ordered):
+            text = str(line.get("text", ""))
+            norm = normalize_text(text)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            is_context_line = (
+                ("no transaksi" in norm)
+                or ("notransaksi" in compact)
+                or ("jumlah total" in norm)
+            )
+            if not is_context_line:
+                continue
+
+            for j in range(max(0, idx - 2), min(len(ordered), idx + 3)):
+                candidates.extend(self._collect_long_reference_digits(ordered[j].get("text", "")))
+
+        if not candidates:
+            for line in ordered:
+                candidates.extend(self._collect_long_reference_digits(line.get("text", "")))
+
+        if not candidates:
+            return None
+
+        unique = list(dict.fromkeys(candidates))
+        unique.sort(
+            key=lambda value: (
+                len(value),
+                1 if value.startswith("20") else 0,
+            ),
+            reverse=True,
+        )
+        return unique[0]
+
+    def retry_reference_with_raw_ocr(self, raw_image):
+        try:
+            upscaled = cv2.resize(raw_image, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
+            raw_tokens = self.ocr.run_ocr(upscaled)
+            raw_lines = group_tokens_into_lines(raw_tokens)
+            candidate = self._extract_seabank_reference_from_lines(raw_lines)
+            if candidate is None:
+                return None, 0.0
+            return candidate, 0.96
+        except Exception:
+            return None, 0.0
+
     def should_retry_amount_with_raw_ocr(self, lines, rule_outputs):
         current_amount = rule_outputs.get("total_amount", {}).get("value")
         if current_amount is not None:
@@ -339,6 +452,8 @@ class ReceiptFieldExtractorV2:
             return rule_value, max(rule_score, 0.55), "rules_v1_low"
 
         if has_model and model_valid:
+            if field == "reference_no":
+                return None, 0.0, "none"
             return model_value, max(model_score, 0.45), "model_fallback_low"
 
         return None, 0.0, "none"
@@ -489,7 +604,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "2357.jpg"
+    sample_image = IMAGE_DIR / "5.jpg"
 
     output = extractor.predict(
         str(sample_image),
