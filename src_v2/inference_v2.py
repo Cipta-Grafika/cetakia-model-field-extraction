@@ -1,5 +1,7 @@
 # src_v2/inference_v2.py
 
+import os
+import warnings
 from pathlib import Path
 from difflib import SequenceMatcher
 import re
@@ -7,7 +9,9 @@ import time
 import cv2
 import joblib
 import numpy as np
+import sklearn
 from dateutil import parser as date_parser
+from sklearn.exceptions import InconsistentVersionWarning
 
 try:
     from .config import (
@@ -77,12 +81,32 @@ class ReceiptFieldExtractorV2:
         self.rule_parser = RuleFieldParserV1()
 
         self.models = {}
+        self.model_load_version_warnings = []
 
         for field in FIELDS:
             model_path = self.model_dir / f"{field}.joblib"
 
             if model_path.exists():
-                self.models[field] = joblib.load(model_path)
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always", InconsistentVersionWarning)
+                    model = joblib.load(model_path)
+                self.models[field] = model
+                for w in caught:
+                    if issubclass(w.category, InconsistentVersionWarning):
+                        self.model_load_version_warnings.append(f"{field}: {w.message}")
+
+        if self.model_load_version_warnings and os.getenv("ALLOW_MODEL_VERSION_MISMATCH", "0") != "1":
+            details = "\n".join(f"- {item}" for item in self.model_load_version_warnings)
+            raise RuntimeError(
+                "Model artifacts tidak kompatibel dengan versi library saat ini.\n"
+                f"Runtime sklearn: {sklearn.__version__}\n"
+                "Detail warning:\n"
+                f"{details}\n\n"
+                "Solusi:\n"
+                "1) Gunakan environment dengan dependency lock di requirements.txt (Python >= 3.11), atau\n"
+                "2) Retrain model di environment aktif agar artifact kompatibel.\n"
+                "Jika tetap ingin lanjut meski mismatch, set env ALLOW_MODEL_VERSION_MISMATCH=1."
+            )
 
         self._warmup_model_reranker()
 
@@ -604,7 +628,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "5.jpg"
+    sample_image = IMAGE_DIR / "33.jpg"
 
     output = extractor.predict(
         str(sample_image),

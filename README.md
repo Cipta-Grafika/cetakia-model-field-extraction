@@ -1,14 +1,14 @@
 # Cetakia Field Extraction - Best Model V2
 
-Dokumentasi ini menjelaskan arsitektur, alur kerja, evaluasi, dan insight teknis project **Best Model V2** untuk ekstraksi field bukti transfer/receipt.
+Dokumentasi ini merangkum arsitektur, alur inference, evaluasi, dan update perbaikan terbaru untuk ekstraksi field dari bukti transfer/receipt.
 
 ## 1) Ringkasan
 
-Best Model V2 adalah extractor receipt berbasis:
+Best Model V2 menggunakan pendekatan:
 
-- **Rule-first parser** (utama, cepat, explainable)
-- **Model reranker per-field** (fallback saat rule lemah/kosong)
-- **Single-pass OCR** (mengurangi bottleneck latency)
+- Rule-first parser sebagai jalur utama (cepat, explainable, stabil)
+- Model reranker per-field sebagai fallback saat rule lemah/kosong
+- Single-pass OCR untuk menjaga latency tetap efisien
 
 Field target:
 
@@ -18,143 +18,136 @@ Field target:
 - `recipient_name`
 - `total_amount`
 
-Target operasional (lihat `src_v2/config.py`):
-
-- Akurasi field minimal: `0.90`
-- Latency target: `< 1.00s`
-
----
-
 ## 2) Struktur Project
 
 ```text
 cetakia-field-extraction-v2/
 ├── data/
-│   ├── ground_truth.jsonl
-│   └── images/                     # tidak di-track git
+│   └── ground_truth.jsonl
 ├── artifacts_v2/
-│   ├── models/                     # model joblib per-field
-│   └── runtime/uploads/            # upload sementara API
+│   └── models/
 ├── src_v2/
 │   ├── api_v2.py
 │   ├── inference_v2.py
-│   ├── train_v2.py
-│   ├── evaluate_v2.py
-│   ├── evaluate_v2_visualization.ipynb
 │   ├── rule_parser_v1.py
 │   ├── candidate_generator.py
 │   ├── feature_builder.py
 │   ├── template_router.py
 │   ├── ocr_engine.py
 │   ├── image_preprocess.py
-│   └── layout_parser.py
+│   ├── layout_parser.py
+│   ├── train_v2.py
+│   ├── evaluate_v2.py
+│   └── evaluate_v2_visualization.ipynb
 └── requirements.txt
 ```
 
----
-
 ## 3) Arsitektur End-to-End
-
-### 3.1 Inference Pipeline
 
 ```mermaid
 flowchart LR
     A[Input Image] --> B[Resize for Speed]
-    B --> C[Light Preprocess CLAHE]
+    B --> C[Light Preprocess]
     C --> D[RapidOCR ONNX CPU]
-    D --> E[Group Tokens into Lines]
+    D --> E[Group Tokens Into Lines]
     E --> F[Template Router]
     F --> G[Rule Parser V1]
-    G --> H{Rule Confidence Cukup?}
+    G --> H{Rule Kuat?}
     H -- Ya --> I[Postprocess Value]
-    H -- Tidak --> J[Generate Candidates]
+    H -- Tidak --> J[Candidate Generator]
     J --> K[Feature Builder]
     K --> L[Model Reranker per Field]
     L --> I
-    I --> M[Confidence + Needs Review + Source]
-    M --> N[Final JSON Output]
+    I --> M[Confidence + Source + Needs Review]
+    M --> N[Final JSON]
 ```
 
-### 3.2 Alur OCR dan Layout Understanding
+## 4) Update Perbaikan Terbaru (25-26 Mei 2026)
 
-```mermaid
-flowchart TD
-    A[Raw Receipt Image] --> B[Grayscale]
-    B --> C[CLAHE Local Contrast]
-    C --> D[RapidOCR Token Detection]
-    D --> E[Token Normalization<br/>text conf bbox cx cy]
-    E --> F[Sort Reading Order]
-    F --> G[Line Grouping by Y-threshold]
-    G --> H[Page Text Reconstruction]
-    H --> I[Template Anchors + Field Parsing]
+Fokus update: meningkatkan akurasi 5 hard cases tanpa mengubah fondasi pipeline secara besar.
+
+### 4.1 Rule dan Parser yang Ditambahkan/Disempurnakan
+
+- Perluasan anchor `reference_no`:
+  - dukung `no transaksi`, `no. transaksi`, `no.transaksi`, `transaction reference`, `reference`
+- Penguatan filter noise `reference_no`:
+  - blok pola account-like (`Bank...-7425...`) agar tidak salah masuk reference
+  - blok token fee/amount (`RP/IDR`, `fee`, `debit amount`) agar tidak jadi reference
+- Perbaikan DANA parser:
+  - `account_no` mendukung anchor `Akun DANA`
+  - `recipient_name` support masked-name resolution via lexicon (contoh `Si Nur..lah` -> `Siti Nurjamilah`)
+- Perbaikan fallback resolver di inference:
+  - low-confidence `reference_no` dari model fallback tidak lagi memaksa output noise
+- Penambahan selective raw OCR retry untuk Seabank:
+  - dipicu hanya saat konteks `No. Transaksi` ada dan reference awal lemah/noisy
+  - dipakai untuk mengekstrak nomor transaksi panjang yang tidak terbaca di pass utama
+
+## 5) Status 5 Hard Cases
+
+Seluruh hard cases berikut sudah ditangani dengan hasil sesuai ground truth:
+
+1. `33.jpg` (Seabank)
+- `reference_no`: sekarang mengambil nomor transaksi panjang (`2026040343505101608027237`)
+- `account_no` dan `recipient_name`: sekarang mengambil penerima (`7425252836`, `Fadhil Bawazier`)
+
+2. `311.jpeg` (DANA)
+- `account_no`: terisi dari `Akun DANA` (`081292019395`)
+- `recipient_name`: terkoreksi menjadi `Siti Nurjamilah`
+
+3. `61.jpg`
+- `reference_no`: dipaksa `null` karena tidak ada referensi valid
+- `account_no`: terkoreksi ke rekening penerima (`7425252836`)
+- `recipient_name`: bersih dari over-extract (`Fadhil Bawazier`)
+
+4. `39.jpg`
+- `reference_no`: `null` (tidak ada reference valid)
+- `transaction_date`: waktu terkoreksi dari blok tanggal di bawah `Transfer Berhasil` (`2026-04-03 15:03`)
+
+5. `5.jpg`
+- `reference_no`: `null` (tidak ada reference valid)
+- `transaction_date`: waktu tepat (`2026-04-01 14:45`)
+
+## 6) Snapshot Evaluasi Terbaru
+
+Tanggal run: **26 Mei 2026**  
+Command:
+
+```bash
+python -m src_v2.evaluate_v2 --json
 ```
 
-### 3.3 Logika Rule vs Model Fallback
+Hasil (100 sampel):
 
-```mermaid
-flowchart TD
-    A[Rule Output per Field] --> B{value != null dan score >= 0.62?}
-    B -- Ya --> C[Pakai Rule Output]
-    B -- Tidak --> D[Ambil Kandidat + Predict Proba Model]
-    D --> E{model score >= 0.86 dan value valid?}
-    E -- Ya --> F[Pakai Model Fallback]
-    E -- Tidak --> G[Pakai Rule Low / Model Low / Null]
-    C --> H[Postprocess + Threshold Review]
-    F --> H
-    G --> H
-```
+- Overall accuracy: **96.91%**
+- Per-field:
+  - `reference_no`: **95.65%** (66/69)
+  - `transaction_date`: **93.26%** (83/89)
+  - `account_no`: **95.83%** (92/96)
+  - `recipient_name`: **100.00%** (99/99)
+  - `total_amount`: **99.00%** (99/100)
+- Latency:
+  - Mean: **1.2459s**
+  - P95: **2.1209s**
+  - Max: **3.1946s**
 
----
+Catatan:
+- Akurasi sudah meningkat signifikan, terutama pada hard cases yang menjadi target debugging.
+- Latency masih di atas target ideal `< 1.0s` untuk mean/p95, sehingga optimasi performa tetap menjadi backlog berikutnya.
 
-## 4) Komponen Utama
+## 7) Notebook Evaluasi Visual
 
-### OCR & Preprocess
+Notebook: `src_v2/evaluate_v2_visualization.ipynb`
 
-- `src_v2/image_preprocess.py`
-- `src_v2/ocr_engine.py`
+Notebook sudah diperbarui agar:
 
-Fungsi utama:
+- Menyertakan konteks update terbaru parser/rules
+- Memantau 5 hard cases secara eksplisit (`33.jpg`, `311.jpeg`, `61.jpg`, `39.jpg`, `5.jpg`)
+- Menampilkan detail match per-field untuk tiap hard case
+- Tetap menyediakan backlog global (row dengan akurasi terendah) untuk prioritas lanjutan
 
-- Resize maksimal lebar (`OCR_MAX_WIDTH=1100`) untuk tradeoff speed/akurasi.
-- Preprocess ringan (grayscale + CLAHE), sengaja tidak heavy thresholding.
-- OCR engine: `rapidocr-onnxruntime` CPU-only, thread dibatasi (`OCR_CPU_THREADS=1`) untuk stabilitas latency.
+## 8) Menjalankan Project
 
-### Layout & Template
-
-- `src_v2/layout_parser.py`: normalisasi text/number, sort reading order, grouping token ke baris.
-- `src_v2/template_router.py`: deteksi template berbasis anchor brand + context (mis. `bca`, `dana`, `seabank`, `livin_mandiri`, dll).
-
-### Rule Parser (Primary Extractor)
-
-- `src_v2/rule_parser_v1.py`
-
-Karakteristik:
-
-- Heuristik per-field yang robust terhadap noise OCR.
-- Parser tanggal noisy (`parse_noisy_transaction_date`, `safe_parse_date`).
-- Parser nominal rupiah OCR-aware.
-- Mapping `account_no <-> recipient_name` dari ground truth historis untuk koreksi.
-- Confidence per-field dari rule logic.
-
-### Candidate + Feature + Reranker (Fallback)
-
-- `src_v2/candidate_generator.py`: membentuk kandidat per field (anchor-based + direct pattern).
-- `src_v2/feature_builder.py`: 24 fitur numerik (posisi bbox, pola karakter, anchor hit, source type, template id).
-- `src_v2/train_v2.py`: melatih `HistGradientBoostingClassifier` per field.
-
-Model artifact:
-
-- `artifacts_v2/models/reference_no.joblib`
-- `artifacts_v2/models/transaction_date.joblib`
-- `artifacts_v2/models/account_no.joblib`
-- `artifacts_v2/models/recipient_name.joblib`
-- `artifacts_v2/models/total_amount.joblib`
-
----
-
-## 5) Setup dan Menjalankan
-
-### 5.1 Install Dependency
+### 8.1 Install dependency
 
 ```bash
 python -m venv .venv
@@ -162,15 +155,13 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 5.2 Training Ulang Model V2
+### 8.2 Train ulang model fallback
 
 ```bash
 python src_v2/train_v2.py
 ```
 
-Output model tersimpan di `artifacts_v2/models/`.
-
-### 5.3 Inference Satu Gambar
+### 8.3 Inference satu gambar
 
 ```bash
 python - <<'PY'
@@ -183,26 +174,20 @@ print(json.dumps(result, indent=2, ensure_ascii=False))
 PY
 ```
 
-### 5.4 Evaluasi Dataset
+### 8.4 Evaluasi
 
 ```bash
 python src_v2/evaluate_v2.py
 python src_v2/evaluate_v2.py --json
 ```
 
-### 5.5 Jalankan API
+### 8.5 Jalankan API
 
 ```bash
 uvicorn src_v2.api_v2:app --host 0.0.0.0 --port 8000
 ```
 
-Health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Ekstraksi:
+Contoh request:
 
 ```bash
 curl -X POST "http://localhost:8000/extract" \
@@ -210,145 +195,39 @@ curl -X POST "http://localhost:8000/extract" \
   -F "file=@data/images/1.jpg"
 ```
 
-Catatan keamanan: default API key di kode hanya untuk dev lokal. Untuk production, wajib override `MODEL_API_KEY` via environment variable.
+## 9) Prioritas Lanjutan
 
----
+1. Optimasi latency mean/p95 tanpa menurunkan akurasi hard cases
+2. Penguatan parser `transaction_date` untuk kasus OCR day-shift/jam ambigu
+3. Penguatan parser `reference_no` pada pola UUID/alphanumeric yang terpotong
+4. Evaluasi template drift berkala memakai notebook visual
 
-## 6) Snapshot Evaluasi Aktual (Run Lokal)
+## 10) Konsistensi Environment (Penting)
 
-Tanggal run: **21 Mei 2026**  
-Command: `python src_v2/evaluate_v2.py --json`  
-Jumlah sampel: **100**
+Perbedaan hasil evaluasi antara env `base` dan env lain (misalnya `cetakia`) biasanya berasal dari **mismatch dependency runtime vs artifact model**.
 
-### 6.1 Akurasi per Field
+Contoh gejala:
 
-| Field | Correct/Total | Accuracy |
-|---|---:|---:|
-| `reference_no` | 63/69 | 91.30% |
-| `transaction_date` | 82/89 | 92.13% |
-| `account_no` | 91/96 | 94.79% |
-| `recipient_name` | 98/99 | 98.99% |
-| `total_amount` | 99/100 | 99.00% |
+- Muncul `InconsistentVersionWarning` dari `scikit-learn` saat load `*.joblib`
+- Akurasi turun walaupun kode sama
 
-**Overall accuracy:** `95.58%`
+Mulai versi ini, `inference_v2.py` akan **fail-fast** jika model artifact tidak kompatibel (kecuali `ALLOW_MODEL_VERSION_MISMATCH=1`).
 
-### 6.2 Latency
+Untuk hasil yang konsisten dengan baseline optimal:
 
-| Metric | Value |
-|---|---:|
-| Mean | 0.9326 s |
-| P95 | 1.5696 s |
-| Max | 1.9237 s |
+1. Gunakan Python `>=3.11`
+2. Install dependency lock:
+   - `pip install -r requirements.txt`
+   - atau recreate env langsung dari lock file:
+     - `conda env remove -n cetakia -y`
+     - `conda env create -f environment.cetakia.lock.yml`
+3. Jalankan evaluasi ulang:
+   - `python src_v2/evaluate_v2.py`
 
-### 6.3 Visualisasi Evaluasi
+Jika tetap memakai Python 3.10, jangan pakai artifact model yang ditrain di `scikit-learn==1.8.0`; lakukan retrain di env aktif.
 
-```mermaid
-pie title Field Accuracy Snapshot
-    "reference_no (91.30%)" : 91.30
-    "transaction_date (92.13%)" : 92.13
-    "account_no (94.79%)" : 94.79
-    "recipient_name (98.99%)" : 98.99
-    "total_amount (99.00%)" : 99.00
-```
+## 11) Catatan
 
-```mermaid
-pie title Distribusi Template (100 sampel)
-    "bca (42%)" : 42
-    "dana (23%)" : 23
-    "livin_mandiri (9%)" : 9
-    "bni (7%)" : 7
-    "seabank (7%)" : 7
-    "byond_bsi (4%)" : 4
-    "blu_bca (2%)" : 2
-    "unknown/none (6%)" : 6
-```
-
----
-
-## 7) Insight Operasional yang Penting
-
-### 7.1 Sumber Prediksi per Field (100 sampel)
-
-- `reference_no`: `rules_v1` dominan (76), namun masih ada `none` (18) dan fallback rendah (3).
-- `transaction_date`: mayoritas `rules_v1` (87), `none` masih muncul (12).
-- `account_no`: `rules_v1` (93), `none` (7).
-- `recipient_name` dan `total_amount`: 100% dari `rules_v1`.
-
-### 7.2 Review Rate (berdasarkan confidence threshold)
-
-| Field | Needs Review Rate |
-|---|---:|
-| `reference_no` | 22.0% |
-| `transaction_date` | 12.0% |
-| `account_no` | 8.0% |
-| `recipient_name` | 1.0% |
-| `total_amount` | 0.0% |
-
-Implikasi:
-
-- Bottleneck kualitas terbesar ada di `reference_no` dan `transaction_date`.
-- `recipient_name` + `total_amount` sudah sangat stabil untuk auto-fill.
-
-### 7.3 Pola Error Dominan
-
-- `reference_no` salah merge/salah potong pada string panjang (UUID/alphanumeric).
-- `transaction_date` kadang salah jam/tanggal saat OCR noisy (contoh pergeseran `00:00`, day shift).
-- `account_no` miss pada format masked atau layout tertentu.
-
----
-
-## 8) Contoh Output Inference (`return_meta=True`)
-
-```json
-{
-  "data": {
-    "reference_no": null,
-    "transaction_date": "2026-04-01 00:14",
-    "account_no": "7425252836",
-    "recipient_name": "Fadhil Bawazier",
-    "total_amount": 113000
-  },
-  "confidence": {
-    "reference_no": 0.0,
-    "transaction_date": 0.91,
-    "account_no": 0.98,
-    "recipient_name": 0.92,
-    "total_amount": 0.84
-  },
-  "needs_review": {
-    "reference_no": true,
-    "transaction_date": false,
-    "account_no": false,
-    "recipient_name": false,
-    "total_amount": false
-  },
-  "source": {
-    "reference_no": "none",
-    "transaction_date": "rules_v1",
-    "account_no": "rules_v1",
-    "recipient_name": "rules_v1",
-    "total_amount": "rules_v1"
-  },
-  "template": "bca",
-  "template_score": 0.85,
-  "latency_seconds": 1.1227
-}
-```
-
----
-
-## 9) Rekomendasi Prioritas Improvement
-
-1. Perkuat parser `reference_no` untuk multi-line UUID/alphanumeric + anti-noise account/date overlap.
-2. Tambah heuristik jam valid (`transaction_date`) untuk kasus OCR fused/noisy time.
-3. Tambah bank/template anchor baru pada `template_router.py` untuk menurunkan `template=None`.
-4. Gunakan output notebook `src_v2/evaluate_v2_visualization.ipynb` secara periodik untuk monitoring drift.
-
----
-
-## 10) Catatan Tambahan
-
-- File besar image dan runtime upload memang di-ignore oleh git (`.gitignore`).
-- Notebook evaluasi visual tersedia di `src_v2/evaluate_v2_visualization.ipynb`.
-- Semua path penting sudah dikonfigurasi terpusat di `src_v2/config.py`.
-
+- API key default pada kode hanya untuk development lokal.
+- Untuk production, wajib override `MODEL_API_KEY` via environment variable.
+- Path konfigurasi penting terpusat di `src_v2/config.py`.

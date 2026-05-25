@@ -1,0 +1,18 @@
+name: cetakia
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - pip:
+      - rapidocr-onnxruntime==1.2.3
+      - onnxruntime==1.26.0
+      - opencv-python-headless==4.13.0.92
+      - numpy==2.4.4
+      - pandas==3.0.3
+      - scikit-learn==1.8.0
+      - joblib==1.5.3
+      - python-dateutil==2.9.0.post0
+      - fastapi==0.136.1
+      - uvicorn==0.47.0
+      - python-multipart==0.0.28
