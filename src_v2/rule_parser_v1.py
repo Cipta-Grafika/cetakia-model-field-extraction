@@ -1642,6 +1642,59 @@ class RuleFieldParserV1:
                     if 8 <= len(digits) <= 16:
                         return digits, 0.86
 
+            # Fallback untuk layout transfer bank yang sempat ter-route ke
+            # template dana karena token "dana" generik (mis. "Sumber Dana").
+            # Ambil rekening dari anchor eksplisit penerima agar tidak null.
+            strong_receiver_anchors = (
+                "rekening penerima",
+                "rekening tujuan",
+                "nomor rekening",
+                "no rekening",
+                "account number",
+                "destination account",
+            )
+            stop_hints = (
+                "id transaksi",
+                "no referensi",
+                "nomor referensi",
+                "tujuan transfer",
+                "metode transfer",
+                "catatan",
+            )
+            for i, line in enumerate(ordered):
+                raw = str(line.get("text", ""))
+                norm = normalize_text(raw)
+                compact = re.sub(r"[^a-z0-9]", "", norm)
+                has_receiver_anchor = (
+                    any(anchor in norm for anchor in strong_receiver_anchors)
+                    or ("rekeningpenerima" in compact)
+                    or ("rekeningtujuan" in compact)
+                    or ("nomorrekening" in compact)
+                    or ("norekening" in compact)
+                )
+                if not has_receiver_anchor:
+                    continue
+
+                inline_digits = normalize_number(
+                    re.sub(
+                        r"(?i)^.*?(rekening\s*penerima|rekening\s*tujuan|nomor\s*rekening|no\.?\s*rekening|account\s*number|destination\s*account)\s*[:\-]?\s*",
+                        "",
+                        raw,
+                    )
+                )
+                if 8 <= len(inline_digits) <= 16:
+                    return inline_digits, 0.93
+
+                for j in range(i + 1, min(i + 4, len(ordered))):
+                    nxt = str(ordered[j].get("text", ""))
+                    nxt_norm = normalize_text(nxt)
+                    if any(h in nxt_norm for h in stop_hints):
+                        break
+
+                    digits = normalize_number(nxt)
+                    if 8 <= len(digits) <= 16:
+                        return digits, 0.92
+
             return None, 0.0
 
         reference_anchor_indexes = []

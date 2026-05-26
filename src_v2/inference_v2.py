@@ -628,7 +628,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "33.jpg"
+    sample_image = IMAGE_DIR / "165.png"
 
     output = extractor.predict(
         str(sample_image),
