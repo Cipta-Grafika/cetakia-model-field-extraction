@@ -199,7 +199,7 @@ class ReceiptFieldExtractorV2:
                 }
 
         if self.should_retry_reference_with_raw_ocr(lines, rule_outputs, template_name):
-            raw_reference, raw_ref_score = self.retry_reference_with_raw_ocr(image)
+            raw_reference, raw_ref_score = self.retry_reference_with_raw_ocr(image, template_name)
             current_ref_value = rule_outputs.get("reference_no", {}).get("value")
             current_ref_score = float(rule_outputs.get("reference_no", {}).get("confidence", 0.0))
             if raw_reference is not None and ((current_ref_value is None) or (raw_ref_score > current_ref_score)):
@@ -207,6 +207,17 @@ class ReceiptFieldExtractorV2:
                     "value": raw_reference,
                     "confidence": raw_ref_score,
                     "source": "rules_v1_reference_raw_retry",
+                }
+
+        if self.should_retry_transaction_date_with_raw_ocr(lines, rule_outputs):
+            raw_date, raw_date_score = self.retry_transaction_date_with_raw_ocr(image, template_name)
+            current_date_value = rule_outputs.get("transaction_date", {}).get("value")
+            current_date_score = float(rule_outputs.get("transaction_date", {}).get("confidence", 0.0))
+            if raw_date is not None and ((current_date_value is None) or (raw_date_score > current_date_score)):
+                rule_outputs["transaction_date"] = {
+                    "value": raw_date,
+                    "confidence": raw_date_score,
+                    "source": "rules_v1_date_raw_retry",
                 }
 
         # Jalankan model fallback hanya untuk field rule yang lemah/kosong
@@ -321,16 +332,30 @@ class ReceiptFieldExtractorV2:
             )
         )
 
-    def should_retry_reference_with_raw_ocr(self, lines, rule_outputs, template_name):
-        if template_name != "seabank":
-            return False
+    @staticmethod
+    def _has_reference_anchor_signal(lines):
+        for line in lines:
+            norm = normalize_text(str(line.get("text", "")))
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            if (
+                ("no ref" in norm)
+                or ("no. ref" in norm)
+                or ("nomor referensi" in norm)
+                or ("no referensi" in norm)
+                or ("reference no" in norm)
+                or ("reference id" in norm)
+                or ("ref id" in norm)
+                or ("biz id" in norm)
+                or ("no transaksi" in norm)
+                or ("notransaksi" in compact)
+                or ("idtransaksi" in compact)
+            ):
+                return True
+        return False
 
-        has_reference_anchor = any(
-            ("no transaksi" in normalize_text(str(line.get("text", ""))))
-            or ("notransaksi" in re.sub(r"[^a-z0-9]", "", normalize_text(str(line.get("text", "")))))
-            for line in lines
-        )
-        if not has_reference_anchor:
+    def should_retry_reference_with_raw_ocr(self, lines, rule_outputs, template_name):
+        has_reference_anchor = self._has_reference_anchor_signal(lines)
+        if not has_reference_anchor and template_name != "seabank":
             return False
 
         current_ref = rule_outputs.get("reference_no", {}).get("value")
@@ -342,7 +367,9 @@ class ReceiptFieldExtractorV2:
             return True
 
         current_digits = normalize_number(str(current_ref))
-        if (len(current_digits) < 20) and (current_score < 0.95):
+        if template_name == "seabank" and (len(current_digits) < 20) and (current_score < 0.95):
+            return True
+        if has_reference_anchor and current_score < 0.75:
             return True
 
         return False
@@ -398,15 +425,64 @@ class ReceiptFieldExtractorV2:
         )
         return unique[0]
 
-    def retry_reference_with_raw_ocr(self, raw_image):
+    def retry_reference_with_raw_ocr(self, raw_image, template_name):
         try:
             upscaled = cv2.resize(raw_image, None, fx=1.8, fy=1.8, interpolation=cv2.INTER_CUBIC)
             raw_tokens = self.ocr.run_ocr(upscaled)
             raw_lines = group_tokens_into_lines(raw_tokens)
-            candidate = self._extract_seabank_reference_from_lines(raw_lines)
-            if candidate is None:
+
+            # Prioritas generic parser dari raw OCR (membantu kasus No.Ref yang
+            # hilang pada preprocess), lalu fallback seabank khusus.
+            raw_rule = self.rule_parser.extract(lines=raw_lines, template_name=template_name)
+            candidate = raw_rule.get("reference_no", {}).get("value")
+            score = float(raw_rule.get("reference_no", {}).get("confidence", 0.0))
+            if candidate is not None:
+                candidate = self.rule_parser.resolve_reference_with_lexicon(candidate)
+                return candidate, max(score, 0.8)
+
+            if template_name == "seabank":
+                candidate = self._extract_seabank_reference_from_lines(raw_lines)
+                if candidate is not None:
+                    return candidate, 0.96
+
+            return None, 0.0
+        except Exception:
+            return None, 0.0
+
+    def should_retry_transaction_date_with_raw_ocr(self, lines, rule_outputs):
+        current_date = rule_outputs.get("transaction_date", {}).get("value")
+        current_score = float(rule_outputs.get("transaction_date", {}).get("confidence", 0.0))
+        if current_date is not None and current_score >= 0.7:
+            return False
+
+        has_date_signal = any(
+            any(
+                hint in normalize_text(str(line.get("text", "")))
+                for hint in (
+                    "tanggal",
+                    "waktu",
+                    "transaction date",
+                    "transaction time",
+                    "wib",
+                    "transfer berhasil",
+                    "transaksi berhasil",
+                    "ref id",
+                )
+            )
+            for line in lines
+        )
+        return has_date_signal
+
+    def retry_transaction_date_with_raw_ocr(self, raw_image, template_name):
+        try:
+            raw_tokens = self.ocr.run_ocr(raw_image)
+            raw_lines = group_tokens_into_lines(raw_tokens)
+            raw_rule = self.rule_parser.extract(lines=raw_lines, template_name=template_name)
+            value = raw_rule.get("transaction_date", {}).get("value")
+            score = float(raw_rule.get("transaction_date", {}).get("confidence", 0.0))
+            if value is None:
                 return None, 0.0
-            return candidate, 0.96
+            return value, max(score, 0.78)
         except Exception:
             return None, 0.0
 
@@ -628,7 +704,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "165.png"
+    sample_image = IMAGE_DIR / "65.jpg"
 
     output = extractor.predict(
         str(sample_image),

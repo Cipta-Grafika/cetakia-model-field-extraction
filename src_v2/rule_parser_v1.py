@@ -414,6 +414,59 @@ def _resolve_month(token: str) -> Optional[int]:
     return None
 
 
+def _has_date_context(text: str) -> bool:
+    norm = normalize_text(text)
+    if not norm:
+        return False
+
+    if re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", norm):
+        return True
+    if re.search(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", norm):
+        return True
+    if re.search(rf"\b{MONTH_TOKEN_PATTERN}\b", norm, flags=re.IGNORECASE):
+        return True
+    if re.search(rf"\d{{1,2}}{MONTH_TOKEN_PATTERN}\w*20\d{{2}}", norm, flags=re.IGNORECASE):
+        return True
+    if re.search(rf"{MONTH_TOKEN_PATTERN}\w*\d{{1,2}}(?:,|\s|-)*20\d{{2}}", norm, flags=re.IGNORECASE):
+        return True
+    if any(h in norm for h in DATE_LABEL_HINTS):
+        return True
+    return False
+
+
+def _is_status_bar_time_line(text: str, line_index: int) -> bool:
+    if line_index > 1:
+        return False
+
+    norm = normalize_text(text)
+    if not norm:
+        return False
+    if _has_date_context(norm):
+        return False
+
+    hour, minute = _extract_time_component(norm)
+    if hour == 0 and minute == 0:
+        return False
+
+    compact = re.sub(r"[^a-z0-9:. ]+", " ", norm)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    if len(compact) <= 12:
+        return True
+
+    mobile_hints = ("4g", "5g", "lte", "wifi", "signal", "battery")
+    if any(h in compact for h in mobile_hints):
+        return True
+
+    tokens = re.findall(r"[a-z0-9:.]+", compact)
+    if tokens and all(
+        bool(re.fullmatch(r"\d{1,2}[:.]\d{2}", tok)) or tok in mobile_hints or tok.isdigit()
+        for tok in tokens
+    ):
+        return True
+
+    return False
+
+
 def _extract_time_component(text: str) -> Tuple[int, int]:
     normalized = str(text).replace(";", ":")
     normalized = re.sub(r"(?<=\d)\.(?=\d{2}(?:\D|$))", ":", normalized)
@@ -460,12 +513,7 @@ def _extract_time_component(text: str) -> Tuple[int, int]:
 
     # Batasi format hyphenated agar tidak menelan token referensi seperti
     # "...6CA3-49CE" menjadi waktu palsu 03:49.
-    has_time_context = bool(
-        re.search(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", normalized)
-        or re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", normalized)
-        or re.search(rf"\b{MONTH_TOKEN_PATTERN}\b", normalized, flags=re.IGNORECASE)
-        or any(h in normalized for h in DATE_LABEL_HINTS)
-    )
+    has_time_context = _has_date_context(normalized)
     if has_time_context:
         hyphenated = re.search(r"(?<!\d)([01]?\d|2[0-3])[-]([0-5]\d)(?!\d)", normalized)
         if hyphenated:
@@ -1208,6 +1256,7 @@ class RuleFieldParserV1:
             return base_value
 
         merged_best = base
+        max_distance = 70 if (re.search(r"[A-Za-z]", base) and re.search(r"\d", base)) else 55
 
         def merge_parts(lhs: str, rhs: str) -> str:
             if not rhs:
@@ -1236,8 +1285,8 @@ class RuleFieldParserV1:
                 return lhs + rhs[overlap:]
             return lhs + rhs
 
-        for j in range(line_index + 1, min(line_index + 3, len(ordered_lines))):
-            if self._line_distance(ordered_lines[line_index], ordered_lines[j]) > 55:
+        for j in range(line_index + 1, min(line_index + 4, len(ordered_lines))):
+            if self._line_distance(ordered_lines[line_index], ordered_lines[j]) > max_distance:
                 continue
 
             tail = self._extract_reference_continuation(
@@ -1315,7 +1364,12 @@ class RuleFieldParserV1:
         if (
             ("rek penerima" in norm_hint)
             or ("rek asal" in norm_hint)
+            or ("rek tujuan" in norm_hint)
+            or ("no rek" in norm_hint)
+            or ("nomor rek" in norm_hint)
             or ("rekening penerima" in norm_hint)
+            or ("rekening asal" in norm_hint)
+            or ("rekening tujuan" in norm_hint)
             or ("rekening sumber" in norm_hint)
             or ("sumber dana" in norm_hint)
             or ("external serial" in norm_hint)
@@ -1451,16 +1505,27 @@ class RuleFieldParserV1:
                     allow_bifast_tail=allow_bifast_tail,
                 )
 
-                # Handle UUID yang terpotong ke baris berikutnya.
+                # Handle UUID/hex reference yang terpotong ke baris berikutnya.
                 if (
                     i + 1 < len(ordered)
-                    and re.fullmatch(r"[A-Fa-f0-9]{4,}(?:-[A-Fa-f0-9]{3,}){1,3}", inline_value)
+                    and re.fullmatch(r"[A-Fa-f0-9]{4,}(?:-[A-Fa-f0-9]{3,}){1,6}", inline_value)
                 ):
-                    nxt = self._normalize_reference_value(ordered[i + 1].get("text", ""))
-                    if nxt and re.fullmatch(r"[A-Fa-f0-9]{4,}(?:-[A-Fa-f0-9]{3,}){1,3}", nxt):
-                        merged_uuid = f"{inline_value}-{nxt}"
-                        if self._is_reference_candidate(merged_uuid):
-                            inline_value = merged_uuid
+                    uuid_parts = [part for part in inline_value.split("-") if part]
+                    for j in range(i + 1, min(i + 4, len(ordered))):
+                        if self._line_distance(ordered[i], ordered[j]) > 75:
+                            continue
+                        nxt = self._normalize_reference_value(ordered[j].get("text", ""))
+                        if not nxt:
+                            continue
+                        if not re.fullmatch(r"[A-Fa-f0-9]{4,}(?:-[A-Fa-f0-9]{3,}){0,6}", nxt):
+                            continue
+                        for part in [p for p in nxt.split("-") if p]:
+                            if part not in uuid_parts:
+                                uuid_parts.append(part)
+
+                    merged_uuid = "-".join(uuid_parts)
+                    if self._is_reference_candidate(merged_uuid):
+                        inline_value = merged_uuid
 
                 return inline_value, 0.99
 
@@ -2122,25 +2187,33 @@ class RuleFieldParserV1:
         current_hour = int(m.group(2))
         current_minute = int(m.group(3))
 
+        date_line_indexes = [
+            idx
+            for idx, line in enumerate(lines)
+            if _has_date_context(str(line.get("text", "")))
+        ]
+
         candidates = []
         for idx, line in enumerate(lines):
             text = str(line.get("text", ""))
             norm = normalize_text(text)
+            if _is_status_bar_time_line(text, idx):
+                continue
+
             hour, minute = _extract_time_component(norm)
             if hour == 0 and minute == 0:
                 continue
 
             score = 0.25
-            has_date_pattern = bool(
-                re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", norm)
-                or re.search(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", norm)
-                or re.search(rf"\b{MONTH_TOKEN_PATTERN}\b", norm, flags=re.IGNORECASE)
-            )
+            has_date_pattern = _has_date_context(norm)
             if has_date_pattern:
                 score += 0.65
 
             if any(h in norm for h in DATE_LABEL_HINTS):
                 score += 0.45
+
+            if (not has_date_pattern) and date_line_indexes and min(abs(idx - d) for d in date_line_indexes) <= 2:
+                score += 0.25
 
             if re.search(r"\b(wib|wit|wita)\b", norm):
                 score += 0.2
@@ -2163,7 +2236,7 @@ class RuleFieldParserV1:
 
         # Jika parsed awal sudah punya jam valid, jangan override kecuali
         # kandidat pengganti sangat kuat (biasanya baris berlabel + tanggal).
-        min_override_score = 0.5 if (current_hour == 0 and current_minute == 0) else 1.05
+        min_override_score = 0.5 if (current_hour == 0 and current_minute == 0) else 0.85
         if best_score < min_override_score:
             return parsed_date
 
@@ -2191,24 +2264,20 @@ class RuleFieldParserV1:
                     return self._override_time_from_lines(parsed, ordered), 0.94
 
         # Anchor-based compose date + time.
-        date_lines = []
-        time_lines = []
+        date_lines: List[Tuple[int, str]] = []
+        time_lines: List[Tuple[int, str]] = []
 
-        for line in ordered:
+        for idx, line in enumerate(ordered):
             text = str(line.get("text", ""))
             norm = normalize_text(text)
 
-            has_date = bool(
-                re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", norm)
-                or re.search(r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4}", norm)
-                or re.search(rf"\b{MONTH_TOKEN_PATTERN}\b", norm, flags=re.IGNORECASE)
-            )
+            has_date = _has_date_context(norm)
             has_time = bool(re.search(r"\d{1,2}[:.]\d{2}", norm) or re.search(r"\d{1,2}\s+\d{2}\s+\d{2}", norm))
 
             if has_date:
-                date_lines.append(text)
-            if has_time:
-                time_lines.append(text)
+                date_lines.append((idx, text))
+            if has_time and not _is_status_bar_time_line(text, idx):
+                time_lines.append((idx, text))
 
             if has_date and has_time:
                 parsed = parse_noisy_transaction_date(text)
@@ -2219,11 +2288,21 @@ class RuleFieldParserV1:
                     return self._override_time_from_lines(parsed, ordered), 0.88
 
         if date_lines and time_lines:
-            for d in date_lines:
-                for t in time_lines:
-                    parsed = parse_noisy_transaction_date(f"{d} {t}")
+            composed_candidates: List[Tuple[float, str]] = []
+            for d_idx, d_text in date_lines:
+                for t_idx, t_text in time_lines:
+                    parsed = parse_noisy_transaction_date(f"{d_text} {t_text}")
                     if parsed:
-                        return self._override_time_from_lines(parsed, ordered), 0.86
+                        pair_score = 0.86
+                        if abs(d_idx - t_idx) <= 2:
+                            pair_score += 0.08
+                        if any(h in normalize_text(t_text) for h in DATE_LABEL_HINTS):
+                            pair_score += 0.06
+                        composed_candidates.append((min(0.96, pair_score), parsed))
+            if composed_candidates:
+                composed_candidates.sort(key=lambda x: x[0], reverse=True)
+                best_score, best_parsed = composed_candidates[0]
+                return self._override_time_from_lines(best_parsed, ordered), best_score
 
         full_text = " ".join(str(l.get("text", "")) for l in ordered)
         parsed = parse_noisy_transaction_date(full_text)
