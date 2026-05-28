@@ -62,88 +62,111 @@ flowchart LR
     M --> N[Final JSON]
 ```
 
-## 4) Update Perbaikan Terbaru (25-26 Mei 2026)
+## 4) Update Perbaikan Terbaru (25-28 Mei 2026)
 
-Fokus update: meningkatkan akurasi 5 hard cases tanpa mengubah fondasi pipeline secara besar.
+Fokus update: menaikkan akurasi rule parser untuk kasus hard OCR tanpa mengubah fondasi pipeline.
 
-### 4.1 Rule dan Parser yang Ditambahkan/Disempurnakan
+### 4.1 Penguatan `transaction_date`
 
-- Perluasan anchor `reference_no`:
-  - dukung `no transaksi`, `no. transaksi`, `no.transaksi`, `transaction reference`, `reference`
-- Penguatan filter noise `reference_no`:
-  - blok pola account-like (`Bank...-7425...`) agar tidak salah masuk reference
-  - blok token fee/amount (`RP/IDR`, `fee`, `debit amount`) agar tidak jadi reference
-- Perbaikan DANA parser:
-  - `account_no` mendukung anchor `Akun DANA`
-  - `recipient_name` support masked-name resolution via lexicon (contoh `Si Nur..lah` -> `Siti Nurjamilah`)
-- Perbaikan fallback resolver di inference:
-  - low-confidence `reference_no` dari model fallback tidak lagi memaksa output noise
-- Penambahan selective raw OCR retry untuk Seabank:
-  - dipicu hanya saat konteks `No. Transaksi` ada dan reference awal lemah/noisy
-  - dipakai untuk mengekstrak nomor transaksi panjang yang tidak terbaca di pass utama
+- Menambah deteksi konteks tanggal untuk format fused OCR, contoh `08April2026,17:35:54WIB`.
+- Menambah filter status-bar time di baris paling atas agar waktu seperti `17.36`, `21.29`, `1.42` tidak dipakai sebagai waktu transaksi.
+- Menambah pemilihan kandidat waktu berbasis kedekatan dengan baris tanggal/anchor (`tanggal`, `waktu`, `WIB`).
+- Menambah selective raw OCR retry untuk `transaction_date` saat hasil preprocess kosong atau lemah.
 
-## 5) Status 5 Hard Cases
+### 4.2 Penguatan `reference_no`
 
-Seluruh hard cases berikut sudah ditangani dengan hasil sesuai ground truth:
+- Menambah merge multi-line alphanumeric/UUID agar mendukung 2 baris atau lebih dari 2 baris.
+- Menambah dedup segmen saat merge supaya tidak mengulang token baris sebelumnya.
+- Memperketat noise filter agar baris rekening (`No.Rek.*`, `rekening tujuan/asal/penerima`) tidak salah masuk ke `reference_no`.
+- Menambah selective raw OCR retry `reference_no` berbasis anchor (`No. Ref`, `Ref ID`, `No. Transaksi`, `Biz ID`) saat skor awal rendah.
 
-1. `33.jpg` (Seabank)
-- `reference_no`: sekarang mengambil nomor transaksi panjang (`2026040343505101608027237`)
-- `account_no` dan `recipient_name`: sekarang mengambil penerima (`7425252836`, `Fadhil Bawazier`)
+### 4.3 Stabilitas Inference
 
-2. `311.jpeg` (DANA)
-- `account_no`: terisi dari `Akun DANA` (`081292019395`)
-- `recipient_name`: terkoreksi menjadi `Siti Nurjamilah`
+- Rule output tetap menjadi prioritas utama.
+- Retry raw OCR hanya dipanggil selektif pada field yang memang lemah/kosong agar peningkatan akurasi tetap efisien terhadap latency.
 
-3. `61.jpg`
-- `reference_no`: dipaksa `null` karena tidak ada referensi valid
-- `account_no`: terkoreksi ke rekening penerima (`7425252836`)
-- `recipient_name`: bersih dari over-extract (`Fadhil Bawazier`)
+## 5) Status Hard Cases
 
-4. `39.jpg`
-- `reference_no`: `null` (tidak ada reference valid)
-- `transaction_date`: waktu terkoreksi dari blok tanggal di bawah `Transfer Berhasil` (`2026-04-03 15:03`)
+### 5.1 Batch Hard Cases Awal
 
-5. `5.jpg`
-- `reference_no`: `null` (tidak ada reference valid)
-- `transaction_date`: waktu tepat (`2026-04-01 14:45`)
+Seluruh hard cases awal tetap terjaga sesuai ground truth:
 
-## 6) Snapshot Evaluasi Terbaru
+- `33.jpg` (Seabank): `reference_no` panjang berhasil diambil, `account_no` dan `recipient_name` penerima benar.
+- `311.jpeg` (DANA): `account_no` dari `Akun DANA` terisi, `recipient_name` terkoreksi.
+- `61.jpg`: `reference_no` dipaksa `null`, `account_no` dan `recipient_name` bersih.
+- `39.jpg`: `reference_no` `null`, `transaction_date` terkoreksi dari blok tanggal transaksi.
+- `5.jpg`: `reference_no` `null`, `transaction_date` tepat.
 
-Tanggal run: **26 Mei 2026**  
-Command:
+### 5.2 Batch Debugging Lanjutan (Receipt 28/32/34/65/77/85/121)
+
+Semua kasus berikut sudah sesuai ekspektasi debugging:
+
+- `28.jpg` (wondr BNI): `transaction_date` tidak lagi `null`, sekarang `2026-04-02 19:09` dari baris tanggal di atas `Ref ID`.
+- `34.jpg` (BRI): `reference_no` terisi dari `No. Ref` menjadi `119942982752` (tidak lagi `null`).
+- `32.jpg` (BCA): `reference_no` multi-line terkoreksi menjadi `B9C62C15-CF2A-4837-8D93-E87E7E791B80` (tidak lagi duplikasi segmen line 2).
+- `85.jpg` (BRI): waktu `transaction_date` terkoreksi ke waktu struk (`17:35`), bukan status bar (`17:36`).
+- `121.jpg`: `reference_no` dipaksa `null` karena tidak ada reference valid, mencegah over-extract dari `No.Rek.Tujuan`.
+- `77.jpg` (Jago): waktu `transaction_date` terkoreksi ke `21:28` dari isi receipt, bukan status bar `21:29`.
+- `65.jpg` (BNI): waktu `transaction_date` terkoreksi ke `13:42` dari `Waktu Transaksi`, bukan `1:42` status bar.
+
+## 6) Snapshot Evaluasi Terbaru (Rerun Notebook)
+
+Sumber metrik:
+
+- `artifacts_v2/evaluation_visuals_v2/summary_100.json` (hasil terbaru).
+- `artifacts_v2/evaluation_visuals_v2/baseline_summary_100.json` (sebelum hard-case debugging).
+
+Command evaluasi:
 
 ```bash
 python -m src_v2.evaluate_v2 --json
 ```
 
-Hasil (100 sampel):
+Hasil terbaru (100 sampel, rerun 28 Mei 2026):
 
-- Overall accuracy: **96.91%**
-- Per-field:
-  - `reference_no`: **95.65%** (66/69)
-  - `transaction_date`: **93.26%** (83/89)
-  - `account_no`: **95.83%** (92/96)
-  - `recipient_name`: **100.00%** (99/99)
-  - `total_amount`: **99.00%** (99/100)
-- Latency:
-  - Mean: **1.2459s**
-  - P95: **2.1209s**
-  - Max: **3.1946s**
+- Overall accuracy: **98.90%**.
+- `reference_no`: **98.55%** (68/69).
+- `transaction_date`: **96.63%** (86/89).
+- `account_no`: **100.00%** (96/96).
+- `recipient_name`: **100.00%** (99/99).
+- `total_amount`: **99.00%** (99/100).
+- Latency mean: **1.0987s**.
+- Latency median: **1.1098s**.
+- Latency P90: **1.8889s**.
+- Latency P95: **2.2983s**.
+- Latency P99: **2.8193s**.
+- Latency max: **2.8633s**.
+- Rasio inferensi <1 detik: **40%**.
 
-Catatan:
-- Akurasi sudah meningkat signifikan, terutama pada hard cases yang menjadi target debugging.
-- Latency masih di atas target ideal `< 1.0s` untuk mean/p95, sehingga optimasi performa tetap menjadi backlog berikutnya.
+Dampak dibanding baseline (100 sampel):
+
+- Overall accuracy naik **+13.47 poin** (85.43% -> 98.90%).
+- `transaction_date` naik **+28.09 poin** (68.54% -> 96.63%).
+- `reference_no` naik **+23.19 poin** (75.36% -> 98.55%).
+- `recipient_name` naik **+10.10 poin** (89.90% -> 100.00%).
+- `account_no` naik **+7.29 poin** (92.71% -> 100.00%).
+- `total_amount` naik **+3.00 poin** (96.00% -> 99.00%).
+- Mean latency membaik **-0.2758s** (1.3745s -> 1.0987s).
+- P95 latency naik **+0.1766s** (2.1217s -> 2.2983s), sehingga tail-latency masih perlu optimasi.
 
 ## 7) Notebook Evaluasi Visual
 
 Notebook: `src_v2/evaluate_v2_visualization.ipynb`
 
-Notebook sudah diperbarui agar:
+Artefak visual yang dihasilkan saat rerun:
 
-- Menyertakan konteks update terbaru parser/rules
-- Memantau 5 hard cases secara eksplisit (`33.jpg`, `311.jpeg`, `61.jpg`, `39.jpg`, `5.jpg`)
-- Menampilkan detail match per-field untuk tiap hard case
-- Tetap menyediakan backlog global (row dengan akurasi terendah) untuk prioritas lanjutan
+- `artifacts_v2/evaluation_visuals_v2/chart_field_accuracy_100.png`.
+- `artifacts_v2/evaluation_visuals_v2/chart_latency_100.png`.
+- `artifacts_v2/evaluation_visuals_v2/chart_template_field_heatmap_100.png`.
+- `artifacts_v2/evaluation_visuals_v2/row_level_100.csv`.
+- `artifacts_v2/evaluation_visuals_v2/field_level_100.csv`.
+- `artifacts_v2/evaluation_visuals_v2/summary_100.json`.
+
+Notebook dipakai untuk:
+
+- Verifikasi per-field di hard cases.
+- Monitoring backlog row-level dengan akurasi terendah.
+- Memastikan peningkatan akurasi tidak mengorbankan stabilitas latency.
 
 ## 8) Menjalankan Project
 
