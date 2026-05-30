@@ -1,0 +1,169 @@
+{
+  "generated_at": "2026-05-30 15:58:25",
+  "dataset": {
+    "images_total_in_folder": 7008,
+    "images_evaluated": 7008,
+    "images_with_ground_truth": 100,
+    "labeled_images_evaluated": 100,
+    "unlabeled_images_evaluated": 6908
+  },
+  "runtime": {
+    "duration_seconds": 5858.7221,
+    "duration_minutes": 97.65
+  },
+  "latency": {
+    "mean": 0.8358,
+    "median": 0.7047,
+    "p90": 1.5302,
+    "p95": 1.7336,
+    "p99": 2.2982,
+    "max": 5.4816,
+    "under_1s_ratio": 0.6941
+  },
+  "operational": {
+    "per_field": {
+      "reference_no": {
+        "fill_count": 4506,
+        "fill_rate": 0.643,
+        "avg_confidence_on_filled": 0.8876,
+        "p10_confidence_on_filled": 0.74,
+        "p50_confidence_on_filled": 0.98,
+        "p90_confidence_on_filled": 0.99,
+        "needs_review_rate": 0.3456
+      },
+      "transaction_date": {
+        "fill_count": 5125,
+        "fill_rate": 0.7313,
+        "avg_confidence_on_filled": 0.9103,
+        "p10_confidence_on_filled": 0.91,
+        "p50_confidence_on_filled": 0.91,
+        "p90_confidence_on_filled": 0.94,
+        "needs_review_rate": 0.2733
+      },
+      "account_no": {
+        "fill_count": 5823,
+        "fill_rate": 0.8309,
+        "avg_confidence_on_filled": 0.8925,
+        "p10_confidence_on_filled": 0.62,
+        "p50_confidence_on_filled": 0.98,
+        "p90_confidence_on_filled": 0.98,
+        "needs_review_rate": 0.2115
+      },
+      "recipient_name": {
+        "fill_count": 6504,
+        "fill_rate": 0.9281,
+        "avg_confidence_on_filled": 0.898,
+        "p10_confidence_on_filled": 0.84,
+        "p50_confidence_on_filled": 0.92,
+        "p90_confidence_on_filled": 0.96,
+        "needs_review_rate": 0.0909
+      },
+      "total_amount": {
+        "fill_count": 6884,
+        "fill_rate": 0.9823,
+        "avg_confidence_on_filled": 0.8936,
+        "p10_confidence_on_filled": 0.84,
+        "p50_confidence_on_filled": 0.84,
+        "p90_confidence_on_filled": 0.99,
+        "needs_review_rate": 0.0547
+      }
+    },
+    "error_images_count": 0
+  },
+  "supervised_accuracy": {
+    "labeled_images": 100,
+    "total_comparisons": 453,
+    "overall_accuracy": 1.0,
+    "total_correct": 453,
+    "total_miss": 0,
+    "total_wrong_value": 0,
+    "total_over_extract_on_gt_null": 5,
+    "per_field": {
+      "reference_no": {
+        "total": 69,
+        "correct": 69,
+        "miss": 0,
+        "wrong_value": 0,
+        "over_extract_on_gt_null": 1,
+        "accuracy": 1.0
+      },
+      "transaction_date": {
+        "total": 89,
+        "correct": 89,
+        "miss": 0,
+        "wrong_value": 0,
+        "over_extract_on_gt_null": 1,
+        "accuracy": 1.0
+      },
+      "account_no": {
+        "total": 96,
+        "correct": 96,
+        "miss": 0,
+        "wrong_value": 0,
+        "over_extract_on_gt_null": 2,
+        "accuracy": 1.0
+      },
+      "recipient_name": {
+        "total": 99,
+        "correct": 99,
+        "miss": 0,
+        "wrong_value": 0,
+        "over_extract_on_gt_null": 1,
+        "accuracy": 1.0
+      },
+      "total_amount": {
+        "total": 100,
+        "correct": 100,
+        "miss": 0,
+        "wrong_value": 0,
+        "over_extract_on_gt_null": 0,
+        "accuracy": 1.0
+      }
+    }
+  },
+  "template_distribution": {
+    "unique_templates": 10,
+    "top_templates": [
+      {
+        "template": "bca",
+        "count": 3579
+      },
+      {
+        "template": "unknown",
+        "count": 1136
+      },
+      {
+        "template": "dana",
+        "count": 683
+      },
+      {
+        "template": "livin_mandiri",
+        "count": 501
+      },
+      {
+        "template": "gopay",
+        "count": 444
+      },
+      {
+        "template": "bni",
+        "count": 306
+      },
+      {
+        "template": "seabank",
+        "count": 181
+      },
+      {
+        "template": "byond_bsi",
+        "count": 80
+      },
+      {
+        "template": "shopeepay",
+        "count": 70
+      },
+      {
+        "template": "blu_bca",
+        "count": 28
+      }
+    ]
+  }
+}
