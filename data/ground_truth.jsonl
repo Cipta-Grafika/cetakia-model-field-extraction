@@ -30,7 +30,7 @@
 {"image": "32.jpg", "ground_truth": {"reference_no": "B9C62C15-CF2A-4837-8D93-E87E7E791B80", "transaction_date": "2026-04-03 14:11", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 247000}}
 {"image": "33.jpg", "ground_truth": {"reference_no": "2026040343505101608027237", "transaction_date": null, "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 50000}}
 {"image": "34.jpg", "ground_truth": {"reference_no": "119942982752", "transaction_date": "2026-04-03 09:41", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 80000}}
-{"image": "35.jpg", "ground_truth": {"reference_no": null, "transaction_date": "2026-04-02 13:26", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 427000}}
+{"image": "35.jpg", "ground_truth": {"reference_no": null, "transaction_date": "2026-04-03 13:26", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 427000}}
 {"image": "36.jpg", "ground_truth": {"reference_no": "2026040310121410010100166032896913537", "transaction_date": "2026-04-03 13:29", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 100000}}
 {"image": "37.jpg", "ground_truth": {"reference_no": null, "transaction_date": null, "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 154000}}
 {"image": "38.jpg", "ground_truth": {"reference_no": "20260403BMRIIDJA01", "transaction_date": "2026-04-03 13:47", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 300000}}
@@ -52,7 +52,7 @@
 {"image": "54.jpg", "ground_truth": {"reference_no": "FT26095BH1H7", "transaction_date": "2026-04-05 10:38", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 240000}}
 {"image": "55.jpg", "ground_truth": {"reference_no": "20260405BMRIIDJA010", "transaction_date": "2026-04-05 13:59", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 72000}}
 {"image": "56.jpg", "ground_truth": {"reference_no": "20260405NETBIDJA010O0296534279", "transaction_date": "2026-04-05 15:37", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 80000}}
-{"image": "57.jpg", "ground_truth": {"reference_no": "11A3F8AE-1F6A-4A6C-9B77-546867AB7BC1", "transaction_date": "2026-04-05 20:24", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 21000}}
+{"image": "57.jpg", "ground_truth": {"reference_no": "11A3F8AE-1F6A-4A6C-9B77-546867AB7BC1", "transaction_date": "2026-04-06 20:24", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 21000}}
 {"image": "58.jpg", "ground_truth": {"reference_no": "FT26096371GW", "transaction_date": "2026-04-06 08:50", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 80000}}
 {"image": "59.jpg", "ground_truth": {"reference_no": "20260406141737028999", "transaction_date": "2026-04-06 14:17", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 20000}}
 {"image": "60.jpg", "ground_truth": {"reference_no": "20260406BMRIIDJA0", "transaction_date": "2026-04-06 13:52", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 85000}}
@@ -69,7 +69,7 @@
 {"image": "71.jpg", "ground_truth": {"reference_no": null, "transaction_date": "2026-04-06 16:41", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 120000}}
 {"image": "75.jpg", "ground_truth": {"reference_no": "2026040843505195366785777", "transaction_date": null, "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 52000}}
 {"image": "76.jpg", "ground_truth": {"reference_no": "122572125384", "transaction_date": "2026-04-08 09:41", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 182000}}
-{"image": "77.jpg", "ground_truth": {"reference_no": "0420260406142852zr", "transaction_date": "2026-04-06 21:18", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 350000}}
+{"image": "77.jpg", "ground_truth": {"reference_no": "0420260406142852zr", "transaction_date": "2026-04-06 21:28", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 350000}}
 {"image": "78.jpg", "ground_truth": {"reference_no": "26F93148-D769-40D5-81D3-D6618680B841", "transaction_date": "2026-04-02 10:17", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 115000}}
 {"image": "80.jpg", "ground_truth": {"reference_no": "122753126437", "transaction_date": "2026-04-08 15:22", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 92500}}
 {"image": "81.jpg", "ground_truth": {"reference_no": "2604082742605109", "transaction_date": "2026-04-08 09:19", "account_no": "7425252836", "recipient_name": "Fadhil Bawazier", "total_amount": 44000}}
@@ -95,6 +95,6 @@
 {"image": "342.jpeg", "ground_truth": {"reference_no": "000000083969", "transaction_date": "2026-04-16 05:27", "account_no": "1091808370", "recipient_name": "Jazmi Hamzah", "total_amount": 120000}}
 {"image": "343.jpeg", "ground_truth": {"reference_no": "965e2e63-25a3-4629-8382-5fd0c5281ceb", "transaction_date": "2026-04-13 13:20", "account_no": null, "recipient_name": "Cipta Grafika", "total_amount": 25000}}
 {"image": "344.jpeg", "ground_truth": {"reference_no": "381512711", "transaction_date": "2026-04-17 11:39", "account_no": "1091-8083-70", "recipient_name": "Jazmi Hamzah", "total_amount": 54000}}
-{"image": "346.jpg", "ground_truth": {"reference_no": "20240911BMRIIDJA010002294346775", "transaction_date": "2024-09-11 17:21", "account_no": "1091808370", "recipient_name": "Jazmi Hamzah", "total_amount": 112500}}
+{"image": "346.jpg", "ground_truth": {"reference_no": "20240911BMRIIDJA01000", "transaction_date": "2024-09-11 17:21", "account_no": "1091808370", "recipient_name": "Jazmi Hamzah", "total_amount": 110000}}
 {"image": "348.jpg", "ground_truth": {"reference_no": null, "transaction_date": "2024-09-11 17:36", "account_no": 1091808370, "recipient_name": "Jazmi Hamzah", "total_amount": 1015000}}
 {"image": "350.jpg", "ground_truth": {"reference_no": "0100000V6QCQ", "transaction_date": "2024-09-11 19:34", "account_no": null, "recipient_name": "Cipta Grafika Digital", "total_amount": 805000}}

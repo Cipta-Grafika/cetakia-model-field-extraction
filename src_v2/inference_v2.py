@@ -342,11 +342,14 @@ class ReceiptFieldExtractorV2:
                 or ("no. ref" in norm)
                 or ("nomor referensi" in norm)
                 or ("no referensi" in norm)
+                or ("nomor resi" in norm)
+                or ("no resi" in norm)
                 or ("reference no" in norm)
                 or ("reference id" in norm)
                 or ("ref id" in norm)
                 or ("biz id" in norm)
                 or ("no transaksi" in norm)
+                or ("noresi" in compact)
                 or ("notransaksi" in compact)
                 or ("idtransaksi" in compact)
             ):
@@ -704,7 +707,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "65.jpg"
+    sample_image = IMAGE_DIR / "95.jpg"
 
     output = extractor.predict(
         str(sample_image),

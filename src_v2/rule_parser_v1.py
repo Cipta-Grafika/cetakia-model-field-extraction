@@ -64,6 +64,10 @@ REFERENCE_ANCHOR_HINTS = (
     "no referensi",
     "no. referensi",
     "no.referensi",
+    "nomor resi",
+    "no resi",
+    "no. resi",
+    "no.resi",
     "no. ref",
     "no ref",
     "ref id",
@@ -1143,7 +1147,7 @@ class RuleFieldParserV1:
             return None
 
         raw = re.sub(
-            r"(?i)^(no\.?ref(?:erensi|erence)?|refid|ref\.?id|no\.?referensi|no\.?transaksi|noref(?:erensi|erence)?|notransaksi|nomorreferensi|nomortransaksi|reference(?:id|no|number)|bizid|idtransaksi|rincianreferensi|detailreferensi|ordersn|orderid)[:\-]*",
+            r"(?i)^(no\.?ref(?:erensi|erence)?|refid|ref\.?id|no\.?referensi|no\.?resi|no\.?transaksi|noref(?:erensi|erence)?|notransaksi|nomorreferensi|nomorresi|nomortransaksi|reference(?:id|no|number)|bizid|idtransaksi|rincianreferensi|detailreferensi|ordersn|orderid)[:\-]*",
             "",
             raw,
         )
@@ -1158,7 +1162,7 @@ class RuleFieldParserV1:
 
     def _extract_reference_from_anchor_line(self, raw: str) -> Optional[str]:
         anchor_match = re.search(
-            r"(?i)(?:id\s*transaksi|idtransaksi|no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|transaction\s*reference|reference\s*(?:id|no|number)?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)",
+            r"(?i)(?:id\s*transaksi|idtransaksi|no\.?\s*referensi|no\.?\s*resi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*resi|nomor\s*transaksi|transaction\s*reference|reference\s*(?:id|no|number)?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)",
             raw,
         )
         if not anchor_match:
@@ -1176,7 +1180,7 @@ class RuleFieldParserV1:
             if not normalized:
                 continue
             anchored_numeric = (
-                bool(re.fullmatch(r"\d{8,30}", normalize_number(normalized)))
+                bool(re.fullmatch(r"\d{6,30}", normalize_number(normalized)))
                 and not bool(re.search(r"[A-Za-z]", normalized))
             )
             if not self._is_reference_candidate(normalized) and not anchored_numeric:
@@ -1216,6 +1220,9 @@ class RuleFieldParserV1:
             "tujuan",
             "penerima",
             "pengirim",
+            "rek ",
+            "no rek",
+            "nomor rek",
             "rekening",
             "account",
         )
@@ -1254,6 +1261,12 @@ class RuleFieldParserV1:
         base = self._normalize_reference_value(base_value)
         if not base:
             return base_value
+
+        # Reference numerik sangat pendek (mis. "No. Resi 019056") hampir
+        # selalu lengkap dalam satu baris, sehingga jangan digabung dengan
+        # baris berikutnya agar tidak tercampur nomor rekening.
+        if (not re.search(r"[A-Za-z]", base)) and (len(normalize_number(base)) <= 7):
+            return base
 
         merged_best = base
         max_distance = 70 if (re.search(r"[A-Za-z]", base) and re.search(r"\d", base)) else 55
@@ -1482,7 +1495,7 @@ class RuleFieldParserV1:
                         continue
 
                     anchored_numeric = (
-                        bool(re.fullmatch(r"\d{8,30}", normalize_number(normalized)))
+                        bool(re.fullmatch(r"\d{6,30}", normalize_number(normalized)))
                         and not bool(re.search(r"[A-Za-z]", normalized))
                     )
                     if self._is_reference_candidate(value) or self._is_reference_candidate(normalized) or anchored_numeric:
@@ -1504,6 +1517,23 @@ class RuleFieldParserV1:
                     i,
                     allow_bifast_tail=allow_bifast_tail,
                 )
+
+                # "No. Resi/Trace" sering muncul sebelum "No. Referensi".
+                # Simpan sebagai fallback saja agar parser tetap bisa
+                # mengambil nilai referensi utama jika ditemukan di bawahnya.
+                is_resi_anchor = self._contains_hint(
+                    raw,
+                    ("no resi", "no. resi", "nomor resi", "resi trace", "no resi trace"),
+                )
+                if is_resi_anchor:
+                    has_reference_anchor = True
+                    fallback_score = 0.9
+                    if re.fullmatch(r"\d{6,30}", normalize_number(inline_value)):
+                        fallback_score += 0.04
+                    if len(inline_value) >= 12:
+                        fallback_score += 0.03
+                    candidates.append((fallback_score, inline_value))
+                    continue
 
                 # Handle UUID/hex reference yang terpotong ke baris berikutnya.
                 if (
@@ -1535,7 +1565,7 @@ class RuleFieldParserV1:
                 # Jika anchor referensi ada tapi nilainya kosong ("-" / empty),
                 # jangan fallback ke field lain seperti rekening penerima.
                 anchor_tail = re.sub(
-                    r"(?i)^.*?(no\.?\s*referensi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*transaksi|transaction\s*reference|reference(?:\s*(?:id|no|number))?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)\s*",
+                    r"(?i)^.*?(no\.?\s*referensi|no\.?\s*resi|no\.?\s*transaksi|nomor\s*referensi|nomor\s*resi|nomor\s*transaksi|transaction\s*reference|reference(?:\s*(?:id|no|number))?|ref\.?\s*id|biz\s*id|no\.?\s*ref\.?|rincian\s*referensi|detail\s*referensi)\s*",
                     "",
                     raw,
                 )
@@ -1550,7 +1580,7 @@ class RuleFieldParserV1:
                         continue
 
                     anchored_numeric = (
-                        bool(re.fullmatch(r"\d{8,30}", normalize_number(compact)))
+                        bool(re.fullmatch(r"\d{6,30}", normalize_number(compact)))
                         and not bool(re.search(r"[A-Za-z]", compact))
                     )
                     if not self._is_reference_candidate(candidate) and not self._is_reference_candidate(compact) and not anchored_numeric:
@@ -1722,6 +1752,8 @@ class RuleFieldParserV1:
                 "id transaksi",
                 "no referensi",
                 "nomor referensi",
+                "no resi",
+                "nomor resi",
                 "tujuan transfer",
                 "metode transfer",
                 "catatan",
@@ -2158,6 +2190,8 @@ class RuleFieldParserV1:
             "biz id",
             "no referensi",
             "nomor referensi",
+            "no resi",
+            "nomor resi",
             "m-transfer",
         )
         if any(any(h in n for h in hints) for n in norms):
