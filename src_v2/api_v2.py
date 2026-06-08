@@ -14,7 +14,7 @@ except ImportError:
     from inference_v2 import ReceiptFieldExtractorV2
 
 
-API_KEY = os.getenv("MODEL_API_KEY", "YOUR-API-KEY")
+API_KEY = os.getenv("MODEL_API_KEY", "0eEQC65XNrdrVCGEEs7IPrLFLEoDYssx")
 
 app = FastAPI(
     title="Cetakia Receipt Extraction API V2",
