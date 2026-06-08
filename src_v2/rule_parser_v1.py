@@ -943,6 +943,49 @@ class RuleFieldParserV1:
         has_dari = any(re.sub(r"[^a-z]", "", n) == "dari" for n in norms)
         return has_seabank and has_ke and has_dari
 
+    def _is_superbank_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        compact_norms = [re.sub(r"[^a-z0-9]", "", n) for n in norms]
+        has_superbank = any("superbank" in n for n in compact_norms)
+        has_success = any(self._is_success_status_text(n) for n in norms)
+        has_receiver_block = any("tujuan" in n or "pengirim" in n for n in compact_norms)
+        return has_superbank and has_success and has_receiver_block
+
+    @staticmethod
+    def _is_success_status_text(text: str) -> bool:
+        compact = re.sub(r"[^a-z0-9]", "", normalize_text(text))
+        if not compact or re.search(r"\d", compact):
+            return False
+
+        if "transaksiberhasil" in compact or "transferberhasil" in compact:
+            return True
+
+        for target in ("transaksiberhasil", "transferberhasil"):
+            if abs(len(compact) - len(target)) > 6:
+                continue
+            if SequenceMatcher(None, compact, target).ratio() >= 0.72:
+                return True
+
+        return False
+
+    def _is_superbank_header_transfer_layout(self, lines: List[Dict]) -> bool:
+        if self._is_superbank_layout(lines):
+            return True
+
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        compact_norms = [re.sub(r"[^a-z0-9]", "", n) for n in norms]
+        has_success = any(self._is_success_status_text(n) for n in norms)
+        has_pengirim = any(("pengirim" in n) or (SequenceMatcher(None, n, "pengirim").ratio() >= 0.78) for n in compact_norms)
+        has_tujuan = any(("tujuan" in n) or (SequenceMatcher(None, n, "tujuan").ratio() >= 0.78) for n in compact_norms)
+        has_date_below_header = False
+        for line in lines:
+            text = str(line.get("text", ""))
+            hour, minute = _extract_time_component(text)
+            if _has_date_context(text) and (hour != 0 or minute != 0):
+                has_date_below_header = True
+                break
+        return has_success and has_pengirim and has_tujuan and has_date_below_header
+
     def _is_shopeepay_layout(self, lines: List[Dict]) -> bool:
         norms = [normalize_text(l.get("text", "")) for l in lines]
         has_brand = any("shopeepay" in n for n in norms)
@@ -2065,6 +2108,113 @@ class RuleFieldParserV1:
         ranked.sort(key=lambda x: (x[0], len(x[1])), reverse=True)
         return ranked[0][1], min(0.99, ranked[0][0])
 
+    def _parse_superbank_header_amount_text(self, text: str) -> Optional[int]:
+        raw = str(text)
+        if not re.search(r"[\dOoQqDdIlLSsBbZz]", raw):
+            return None
+
+        normalized = raw.translate(
+            str.maketrans({
+                "O": "0",
+                "o": "0",
+                "Q": "0",
+                "q": "0",
+                "D": "0",
+                "I": "1",
+                "l": "1",
+                "L": "1",
+                "S": "5",
+                "s": "5",
+                "B": "8",
+                "Z": "2",
+                "z": "2",
+            })
+        )
+        normalized = re.sub(r"(?i)\b(rp|idr)\s+(?=\d)", r"\1", normalized)
+        normalized = re.sub(r"(?<=\d)\s+(?=[\d.,])", "", normalized)
+        normalized = re.sub(r"(?<=[\d.,])\s+(?=\d)", "", normalized)
+
+        amount_texts: List[str] = []
+        for match in re.finditer(r"(?i)(?:rp|idr)\s*[:.]?\s*([0-9][0-9.,]{1,})", normalized):
+            amount_texts.append(match.group(1))
+
+        for match in re.finditer(r"(?<!\d)(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?)(?!\d)", normalized):
+            amount_texts.append(match.group(1))
+
+        for amount_text in amount_texts:
+            value = parse_rupiah_amount_ocr_aware(amount_text)
+            if value is not None and MIN_AMOUNT <= value <= MAX_AMOUNT:
+                return value
+
+        return None
+
+    def _extract_superbank_header_amount(self, ordered: List[Dict]) -> Optional[int]:
+        status_indexes = []
+        for idx, line in enumerate(ordered):
+            if self._is_success_status_text(line.get("text", "")):
+                status_indexes.append(idx)
+
+        has_status_date_header = False
+        for idx in status_indexes:
+            for j in range(idx + 1, min(idx + 5, len(ordered))):
+                text = str(ordered[j].get("text", ""))
+                hour, minute = _extract_time_component(text)
+                if _has_date_context(text) and (hour != 0 or minute != 0):
+                    has_status_date_header = True
+                    break
+            if has_status_date_header:
+                break
+
+        has_superbank_context = self._is_superbank_header_transfer_layout(ordered)
+        if not has_superbank_context and not has_status_date_header:
+            return None
+
+        candidate_indexes = []
+        for idx in status_indexes:
+            candidate_indexes.extend(range(idx, min(idx + 4, len(ordered))))
+
+        if not candidate_indexes and has_superbank_context:
+            max_y = max((float(line.get("bbox", [0, 0, 0, line.get("cy", 0.0)])[3]) for line in ordered), default=0.0)
+            top_limit = max_y * 0.35 if max_y > 0 else 0.0
+            candidate_indexes = [
+                idx for idx, line in enumerate(ordered)
+                if top_limit <= 0.0 or float(line.get("cy", 0.0)) <= top_limit
+            ]
+
+        seen = set()
+        for idx in candidate_indexes:
+            if idx in seen or idx >= len(ordered):
+                continue
+            seen.add(idx)
+            value = self._parse_superbank_header_amount_text(ordered[idx].get("text", ""))
+            if value is not None:
+                return value
+
+        return None
+
+    def _extract_header_amount_near_transaction_date(self, ordered: List[Dict]) -> Optional[int]:
+        max_y = max((float(line.get("bbox", [0, 0, 0, line.get("cy", 0.0)])[3]) for line in ordered), default=0.0)
+        top_limit = max_y * 0.45 if max_y > 0 else 0.0
+
+        for idx, line in enumerate(ordered):
+            text = str(line.get("text", ""))
+            hour, minute = _extract_time_component(text)
+            if not (_has_date_context(text) and (hour != 0 or minute != 0)):
+                continue
+            if top_limit > 0.0 and float(line.get("cy", 0.0)) > top_limit:
+                continue
+
+            for j in range(max(0, idx - 3), idx + 1):
+                candidate_text = str(ordered[j].get("text", ""))
+                candidate_norm = normalize_text(candidate_text)
+                if any(h in candidate_norm for h in AMOUNT_NEGATIVE_HINTS):
+                    continue
+                value = self._parse_superbank_header_amount_text(candidate_text)
+                if value is not None:
+                    return value
+
+        return None
+
     def _extract_amount(self, lines: List[Dict], template_name: Optional[str]) -> Tuple[Optional[int], float]:
         ordered = self._sorted_lines(lines)
 
@@ -2125,6 +2275,12 @@ class RuleFieldParserV1:
             })
 
         if not entries:
+            superbank_amount = self._extract_superbank_header_amount(ordered)
+            if superbank_amount is not None:
+                return superbank_amount, 0.93
+            header_amount = self._extract_header_amount_near_transaction_date(ordered)
+            if header_amount is not None:
+                return header_amount, 0.86
             return None, 0.0
 
         nominal_candidates = [e for e in entries if e["is_nominal"]]

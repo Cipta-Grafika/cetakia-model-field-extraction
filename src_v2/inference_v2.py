@@ -494,6 +494,9 @@ class ReceiptFieldExtractorV2:
         if current_amount is not None:
             return False
 
+        if self.has_superbank_header_amount_context(lines):
+            return True
+
         has_nominal_label = False
         has_fee_amount = False
 
@@ -509,6 +512,31 @@ class ReceiptFieldExtractorV2:
                     has_fee_amount = True
 
         return has_nominal_label and has_fee_amount
+
+    def has_superbank_header_amount_context(self, lines):
+        has_success = False
+        has_superbank = False
+        has_pengirim = False
+        has_tujuan = False
+        has_header_date = False
+
+        for line in lines:
+            text = str(line.get("text", ""))
+            norm = normalize_text(text)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+
+            if self.rule_parser._is_success_status_text(text):  # pylint: disable=protected-access
+                has_success = True
+            if "superbank" in compact:
+                has_superbank = True
+            if "pengirim" in compact:
+                has_pengirim = True
+            if "tujuan" in compact:
+                has_tujuan = True
+            if parse_noisy_transaction_date(text) and re.search(r"\d{1,2}[:.]\d{2}", text):
+                has_header_date = True
+
+        return has_header_date and (has_success or has_superbank or (has_pengirim and has_tujuan))
 
     def retry_amount_with_raw_ocr(self, raw_image, template_name):
         try:
@@ -707,7 +735,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "95.jpg"
+    sample_image = IMAGE_DIR / "7009.jpg"
 
     output = extractor.predict(
         str(sample_image),
