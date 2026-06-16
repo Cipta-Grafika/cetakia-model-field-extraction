@@ -30,6 +30,7 @@ try:
     from .feature_builder import build_candidate_matrix
     from .rule_parser_v1 import (
         RuleFieldParserV1,
+        clean_name_text,
         is_amount_candidate,
         is_human_name_candidate,
         parse_rupiah_amount_ocr_aware,
@@ -53,6 +54,7 @@ except ImportError:
     from feature_builder import build_candidate_matrix
     from rule_parser_v1 import (
         RuleFieldParserV1,
+        clean_name_text,
         is_amount_candidate,
         is_human_name_candidate,
         parse_rupiah_amount_ocr_aware,
@@ -218,6 +220,19 @@ class ReceiptFieldExtractorV2:
                     "value": raw_date,
                     "confidence": raw_date_score,
                     "source": "rules_v1_date_raw_retry",
+                }
+
+        if self.should_retry_recipient_with_superbank_crop(lines, rule_outputs):
+            crop_recipient, crop_recipient_score = self.retry_recipient_with_superbank_crop_ocr(image)
+            current_name_value = rule_outputs.get("recipient_name", {}).get("value")
+            current_name_score = float(rule_outputs.get("recipient_name", {}).get("confidence", 0.0))
+            if crop_recipient is not None and (
+                current_name_value is None or crop_recipient_score > current_name_score
+            ):
+                rule_outputs["recipient_name"] = {
+                    "value": crop_recipient,
+                    "confidence": crop_recipient_score,
+                    "source": "rules_v1_superbank_crop_retry",
                 }
 
         # Jalankan model fallback hanya untuk field rule yang lemah/kosong
@@ -552,6 +567,145 @@ class ReceiptFieldExtractorV2:
         except Exception:
             return None, 0.0
 
+    def should_retry_recipient_with_superbank_crop(self, lines, rule_outputs):
+        if not self.has_superbank_header_amount_context(lines):
+            return False
+
+        current_name = rule_outputs.get("recipient_name", {}).get("value")
+        current_score = float(rule_outputs.get("recipient_name", {}).get("confidence", 0.0))
+
+        if current_name is None:
+            return True
+        if self._looks_like_superbank_ocr_noise(current_name):
+            return True
+        if not is_human_name_candidate(str(current_name)):
+            return True
+
+        return current_score < 0.68
+
+    @staticmethod
+    def _looks_like_superbank_ocr_noise(value):
+        compact = re.sub(r"[^a-z]", "", normalize_text(str(value)))
+        if not compact:
+            return True
+
+        if compact.startswith("super") or compact.startswith("ssuper"):
+            return True
+        if "superbank" in compact:
+            return True
+
+        targets = ("superbank", "ssuperbank", "supperbank", "superhank", "ssuperhank")
+        return any(
+            abs(len(compact) - len(target)) <= 4
+            and SequenceMatcher(None, compact, target).ratio() >= 0.72
+            for target in targets
+        )
+
+    def retry_recipient_with_superbank_crop_ocr(self, raw_image):
+        try:
+            image_height, image_width = raw_image.shape[:2]
+            rois = (
+                (0.45, 0.25, 1.0, 0.43),
+                (0.0, 0.27, 1.0, 0.43),
+            )
+            candidates = []
+
+            for x1_ratio, y1_ratio, x2_ratio, y2_ratio in rois:
+                x1 = int(x1_ratio * image_width)
+                y1 = int(y1_ratio * image_height)
+                x2 = int(x2_ratio * image_width)
+                y2 = int(y2_ratio * image_height)
+                crop = raw_image[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
+
+                upscaled = cv2.resize(crop, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+                crop_tokens = self.ocr.run_ocr(upscaled)
+                crop_lines = group_tokens_into_lines(crop_tokens)
+                recipient, score = self._extract_superbank_recipient_from_crop_lines(crop_lines)
+                if recipient is not None:
+                    candidates.append((score, recipient))
+                    break
+
+            if not candidates:
+                return None, 0.0
+
+            candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
+            score, recipient = candidates[0]
+            return self.rule_parser._normalize_recipient_name_case(recipient), min(0.97, score)  # pylint: disable=protected-access
+        except Exception:
+            return None, 0.0
+
+    def _extract_superbank_recipient_from_crop_lines(self, lines):
+        ordered = sorted(lines, key=lambda line: (float(line.get("cy", 0.0)), float(line.get("cx", 0.0))))
+        account_lines = [
+            line for line in ordered
+            if 8 <= len(normalize_number(line.get("text", ""))) <= 16
+            and re.search(r"(?i)\b(bca|bri|bni|mandiri|seabank|cimb|bsi)\b", str(line.get("text", "")))
+        ]
+
+        candidates = []
+        for idx, line in enumerate(ordered):
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+
+            if any(hint in compact for hint in ("pengirim", "catatan")):
+                continue
+            if normalize_number(raw):
+                continue
+            if self._looks_like_superbank_ocr_noise(raw):
+                continue
+
+            raw_candidates = [raw]
+            if "tujuan" in compact:
+                raw_candidates.insert(
+                    0,
+                    re.sub(r"(?i)^.*?\btujuan\b\s*[:\-]?\s*", "", raw),
+                )
+
+            for raw_candidate in raw_candidates:
+                name = clean_name_text(raw_candidate)
+                if not name:
+                    continue
+                if self._looks_like_superbank_ocr_noise(name):
+                    continue
+                if not is_human_name_candidate(name):
+                    continue
+
+                score = 0.72
+                if len(name.split()) >= 2:
+                    score += 0.1
+                if "tujuan" in compact:
+                    score += 0.14
+
+                line_cy = float(line.get("cy", 0.0))
+                below_accounts = [
+                    float(account_line.get("cy", 0.0)) - line_cy
+                    for account_line in account_lines
+                    if float(account_line.get("cy", 0.0)) > line_cy
+                ]
+                if below_accounts:
+                    nearest_account_dy = min(below_accounts)
+                    if nearest_account_dy <= 180:
+                        score += 0.16
+                    if nearest_account_dy <= 130:
+                        score += 0.08
+                    score += max(0.0, 0.06 - (nearest_account_dy / 1200.0))
+                elif idx + 1 < len(ordered):
+                    next_digits = normalize_number(ordered[idx + 1].get("text", ""))
+                    if 8 <= len(next_digits) <= 16:
+                        score += 0.12
+
+                candidates.append((score, name))
+
+        if not candidates:
+            return None, 0.0
+
+        candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
+        score, name = candidates[0]
+        return name, min(0.97, score)
+
     def resolve_field_value(
         self,
         field,
@@ -735,7 +889,7 @@ class ReceiptFieldExtractorV2:
 if __name__ == "__main__":
     extractor = ReceiptFieldExtractorV2()
 
-    sample_image = IMAGE_DIR / "7009.jpg"
+    sample_image = IMAGE_DIR / "3303.jpg"
 
     output = extractor.predict(
         str(sample_image),

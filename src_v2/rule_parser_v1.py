@@ -1199,6 +1199,17 @@ class RuleFieldParserV1:
         raw = raw.replace("BMRIDJA", "BMRIIDJA")
         raw = raw.replace("BMRI1DJA", "BMRIIDJA")
 
+        octo_match = re.match(
+            r"(?i)^octo(?:clicks)?(?:reference(?:number|no|id)?)?([A-Z]{1,6}\d{8,})(?:reference(?:number|no|id)?)?(?:[-_:;.]*(?:rp|idr)\d.*)?$",
+            raw,
+        )
+        if octo_match:
+            raw = octo_match.group(1)
+        else:
+            octo_amount_tail = re.match(r"(?i)^(RB\d{10,18})(?:[-_:;.]*(?:rp|idr)\d.*)$", raw)
+            if octo_amount_tail:
+                raw = octo_amount_tail.group(1)
+
         if not raw:
             return None
         return raw
@@ -1256,6 +1267,7 @@ class RuleFieldParserV1:
         stop_hints = (
             "tanggal",
             "waktu",
+            "transfer",
             "biaya",
             "nominal",
             "total",
@@ -1263,6 +1275,10 @@ class RuleFieldParserV1:
             "tujuan",
             "penerima",
             "pengirim",
+            "admin",
+            "fee",
+            "free",
+            "bank",
             "rek ",
             "no rek",
             "nomor rek",
@@ -1270,6 +1286,10 @@ class RuleFieldParserV1:
             "account",
         )
         if any(h in norm for h in stop_hints):
+            return None
+
+        compact_norm = re.sub(r"[^a-z0-9]", "", norm)
+        if re.search(r"(?i)(?:^|\s)(?:rp|idr)\s*\d", norm) or re.search(r"(?i)(?:rp|idr)\d", compact_norm):
             return None
 
         if is_datetime_like(raw):
@@ -1285,6 +1305,8 @@ class RuleFieldParserV1:
         for chunk in re.findall(r"[A-Za-z0-9]{4,}", str(raw)):
             normalized = self._normalize_reference_value(chunk)
             if not normalized:
+                continue
+            if re.match(r"(?i)^(?:rp|idr)\d{2,}$", normalized):
                 continue
             if not re.search(r"\d", normalized):
                 continue
@@ -1309,6 +1331,8 @@ class RuleFieldParserV1:
         # selalu lengkap dalam satu baris, sehingga jangan digabung dengan
         # baris berikutnya agar tidak tercampur nomor rekening.
         if (not re.search(r"[A-Za-z]", base)) and (len(normalize_number(base)) <= 7):
+            return base
+        if re.fullmatch(r"(?i)RB\d{10,18}", base):
             return base
 
         merged_best = base
