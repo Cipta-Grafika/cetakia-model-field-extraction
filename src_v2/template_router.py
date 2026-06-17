@@ -31,6 +31,10 @@ TEMPLATE_RULES = {
         "brand": ["blu"],
         "context": ["ref blu", "no ref blu", "transfer berhasil", "bca"],
     },
+    "btn": {
+        "brand": ["btn"],
+        "context": ["id transaksi", "no. reff", "pembayaran ke", "jumlahtransaksi", "jenis transaksi"],
+    },
     "dana": {
         "brand": ["dana"],
         "context": ["id transaksi", "total bayar", "akun bank"],

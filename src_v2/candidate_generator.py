@@ -67,6 +67,12 @@ UI_BLACKLIST = {
     "status",
     "biaya admin",
     "biaya transaksi",
+    "lihat riwayat",
+    "pilihan lain",
+    "kamu membayar",
+    "total pembelian",
+    "rincian pembelian",
+    "informasi lainnya",
 }
 
 

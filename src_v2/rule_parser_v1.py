@@ -39,9 +39,12 @@ MONTH_ALIASES = {
     "agustus": 8,
     "augustus": 8,
     "agust": 8,
+    "agst": 8,
+    "ags": 8,
     "agu": 8,
     "agt": 8,
     "aug": 8,
+    "aqs": 8,
     "september": 9,
     "sept": 9,
     "sep": 9,
@@ -57,7 +60,7 @@ MONTH_ALIASES = {
     "dec": 12,
 }
 
-MONTH_TOKEN_PATTERN = r"(jan|feb|mar|apr|mei|may|jun|jul|agu|aug|sep|oct|okt|nov|dec|des)"
+MONTH_TOKEN_PATTERN = r"(jan|feb|mar|apr|mei|may|jun|jul|agu|ags|aqs|aug|sep|oct|okt|nov|dec|des)"
 
 REFERENCE_ANCHOR_HINTS = (
     "nomor referensi",
@@ -190,6 +193,17 @@ NAME_BLOCKLIST_WORDS = {
     "bca",
     "bri",
     "bni",
+    "lihat",
+    "riwayat",
+    "pilihan",
+    "lain",
+    "kamu",
+    "membayar",
+    "pembelian",
+    "terminal",
+    "rincian",
+    "informasi",
+    "lainnya",
 }
 
 
@@ -280,6 +294,7 @@ def clean_name_text(text: str) -> str:
     value = re.sub(r"\s+", " ", str(text)).strip()
     value = re.sub(r"^[^A-Za-z]+|[^A-Za-z .'-]+$", "", value).strip()
     value = re.sub(r"(?i)^(nama(\s*penerima)?|namapenerima|penerima|recipient|beneficiary)\s*[:\-]?\s*", "", value)
+    value = re.sub(r"(?i)^pembayaran\s+ke\s*[:\-]?\s*", "", value)
     value = re.sub(r"(?i)^ke\s*[:\-]\s*", "", value)
     value = re.sub(r"(?i)^transfer\s+(ke|to)\s+", "", value)
     value = re.split(r"(?i)\s*[-|]\s*(bca|bri|bni|mandiri|seabank|cimb|bsi)\b", value)[0]
@@ -332,6 +347,12 @@ def is_human_name_candidate(text: str) -> bool:
         "office",
         "tower",
         "lantai",
+        "lihat riwayat",
+        "pilihan lain",
+        "kamu membayar",
+        "total pembelian",
+        "rincian pembelian",
+        "informasi lainnya",
     )
     if any(fragment in norm for fragment in bad_fragments):
         return False
@@ -406,8 +427,10 @@ def _normalize_year(year: int) -> int:
 
 
 def _resolve_month(token: str) -> Optional[int]:
-    value = re.sub(r"[^a-z]", "", token.lower())
+    value = token.lower().replace("9", "g")
+    value = re.sub(r"[^a-z]", "", value)
     value = value.replace("1", "l").replace("0", "o")
+    value = value.replace("q", "g")
     if not value:
         return None
 
@@ -422,6 +445,7 @@ def _has_date_context(text: str) -> bool:
     norm = normalize_text(text)
     if not norm:
         return False
+    norm = re.sub(r"(?i)(?<=[a-z])9(?=[a-z])", "g", norm)
 
     if re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", norm):
         return True
@@ -535,6 +559,7 @@ def parse_noisy_transaction_date(text: str) -> Optional[str]:
     norm = re.sub(r"\b(wib|wit|wita)\b", " ", norm)
     norm = norm.replace("|", "1")
     norm = norm.replace(";", ":")
+    norm = re.sub(r"(?i)(?<=[a-z])9(?=[a-z])", "g", norm)
     norm = re.sub(r"\bi(?=\d{3,4}[:.])", "1", norm)
     norm = re.sub(r"(?i)(20\d{2})[-\s]*[il](?=[:.][0-5]\d)", r"\g<1>11", norm)
     norm = re.sub(r"\s+", " ", norm).strip()
@@ -930,6 +955,34 @@ class RuleFieldParserV1:
         has_id_trans = any("id transaksi" in n or "id transak" in n for n in norms)
         return has_dana and has_total_bayar and has_id_trans
 
+    def _is_btn_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        compact_norms = [re.sub(r"[^a-z0-9]", "", n) for n in norms]
+
+        has_btn = any(
+            compact in ("btn", "bankbtn")
+            or "bankbtn" in compact
+            or "banktabungannegara" in compact
+            for compact in compact_norms
+        )
+        has_id_transaksi = any(
+            ("id transaksi" in norm) or ("idtransaksi" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_no_reff = any(
+            ("no. reff" in norm) or ("no reff" in norm) or ("noreff" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_btn_payment_context = any(
+            ("pembayaran ke" in norm)
+            or ("pembayaranke" in compact)
+            or ("jumlahtransaksi" in compact)
+            or ("jenis transaksi" in norm)
+            for norm, compact in zip(norms, compact_norms)
+        )
+
+        return has_btn and has_no_reff and (has_id_transaksi or has_btn_payment_context)
+
     def _is_blu_layout(self, lines: List[Dict]) -> bool:
         return any(
             self._contains_hint(l.get("text", ""), ("ref blu", "no ref blu", "no. ref blu"))
@@ -1017,6 +1070,88 @@ class RuleFieldParserV1:
                 return True
         return False
 
+    def _is_shopee_purchase_payment_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        compact_norms = [re.sub(r"[^a-z0-9]", "", n) for n in norms]
+
+        has_pay_anchor = any(
+            ("kamu membayar" in norm)
+            or ("kamumembayar" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_purchase_section = any(
+            ("total pembelian" in norm)
+            or ("totalpembelian" in compact)
+            or ("rincian pembelian" in norm)
+            or ("rincianpembelian" in compact)
+            or ("informasi lainnya" in norm)
+            or ("informasilainnya" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_shopee_signal = any(
+            ("shopee" in norm)
+            or ("shopeepay" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_header_amount = any(is_amount_candidate(str(line.get("text", ""))) for line in lines[:5])
+
+        return has_pay_anchor and has_purchase_section and has_header_amount and (
+            has_shopee_signal or len(lines) <= 14
+        )
+
+    def _extract_shopee_purchase_recipient(self, ordered_lines: List[Dict]) -> Optional[str]:
+        pay_anchor_indexes = [
+            idx
+            for idx, line in enumerate(ordered_lines)
+            if self._contains_hint(line.get("text", ""), ("kamu membayar",))
+        ]
+        if not pay_anchor_indexes:
+            return None
+
+        first_pay_idx = pay_anchor_indexes[0]
+        section_hints = (
+            "kamu membayar",
+            "total pembelian",
+            "rincian pembelian",
+            "informasi lainnya",
+            "shopeepay",
+            "download",
+            "cashback",
+            "pulsa",
+            "listrik",
+            "tagihan",
+            "ok",
+        )
+        candidates: List[Tuple[float, str]] = []
+
+        for idx in range(max(0, first_pay_idx - 5), first_pay_idx):
+            raw = str(ordered_lines[idx].get("text", ""))
+            norm = normalize_text(raw)
+            if not raw or any(hint in norm for hint in section_hints):
+                continue
+            if is_amount_candidate(raw) or _has_date_context(raw) or normalize_number(raw):
+                continue
+
+            candidate = clean_name_text(raw)
+            if not is_human_name_candidate(candidate):
+                continue
+
+            score = 0.84
+            distance = first_pay_idx - idx
+            if distance == 1:
+                score += 0.1
+            elif distance == 2:
+                score += 0.05
+            if len(candidate.split()) >= 2:
+                score += 0.04
+            candidates.append((score, candidate))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (item[0], len(item[1])), reverse=True)
+        return candidates[0][1]
+
     def _is_gopay_layout(self, lines: List[Dict]) -> bool:
         norms = [normalize_text(l.get("text", "")) for l in lines]
         has_brand = any("gopay" in n for n in norms)
@@ -1029,6 +1164,50 @@ class RuleFieldParserV1:
             for n in norms
         )
         return has_brand and has_context
+
+    def _is_gopay_merchant_payment_layout(self, lines: List[Dict]) -> bool:
+        norms = [normalize_text(l.get("text", "")) for l in lines]
+        compact_norms = [re.sub(r"[^a-z0-9]", "", n) for n in norms]
+
+        has_success_pay_to = any(
+            ("berhasil bayar ke" in norm)
+            or ("berhasilbayarke" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_payment_section = any(
+            ("rincian pembayaran" in norm)
+            or ("rincianpembayaran" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_history_cta = any(
+            ("lihat riwayat" in norm)
+            or ("lihatriwayat" in compact)
+            for norm, compact in zip(norms, compact_norms)
+        )
+        has_header_amount = any(is_amount_candidate(str(line.get("text", ""))) for line in lines[:4])
+
+        return has_success_pay_to and has_header_amount and (has_payment_section or has_history_cta)
+
+    def _extract_gopay_merchant_payment_recipient(self, ordered_lines: List[Dict]) -> Optional[str]:
+        for line in ordered_lines:
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            if ("berhasil bayar ke" not in norm) and ("berhasilbayarke" not in compact):
+                continue
+
+            match = re.search(
+                r"(?i)berhasil\s*bayar\s*ke\s*([A-Za-z][A-Za-z .'-]{2,80})",
+                raw,
+            )
+            if not match:
+                continue
+
+            candidate = clean_name_text(match.group(1))
+            if is_human_name_candidate(candidate):
+                return candidate
+
+        return None
 
     def _extract_shopeepay_order_sn_reference(self, ordered_lines: List[Dict]) -> Optional[str]:
         stop_hints = (
@@ -1110,6 +1289,36 @@ class RuleFieldParserV1:
 
         return None
 
+    def _extract_btn_reference(self, ordered_lines: List[Dict]) -> Optional[str]:
+        for idx, line in enumerate(ordered_lines):
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            if ("no. reff" not in norm) and ("no reff" not in norm) and ("noreff" not in compact):
+                continue
+
+            values = []
+            inline = re.search(r"(?i)\bno\.?\s*ref+\.?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-]{5,})", raw)
+            if inline:
+                values.append(inline.group(1))
+
+            tail = re.sub(r"(?i)^.*?\bno\.?\s*ref+\.?\s*[:\-]?\s*", "", raw)
+            values.extend(re.findall(r"[A-Za-z0-9][A-Za-z0-9\-]{5,}", tail))
+
+            for j in range(idx + 1, min(idx + 3, len(ordered_lines))):
+                nxt = str(ordered_lines[j].get("text", ""))
+                nxt_norm = normalize_text(nxt)
+                if any(h in nxt_norm for h in ("rekening", "jenis transaksi", "pembayaran", "terminal", "nominal", "tips", "jumlah")):
+                    break
+                values.extend(re.findall(r"[A-Za-z0-9][A-Za-z0-9\-]{5,}", nxt))
+
+            for value in values:
+                normalized = self._normalize_reference_value(value)
+                if normalized and self._is_reference_candidate(normalized):
+                    return normalized
+
+        return None
+
     def _match_name_lexicon(self, name: str) -> Optional[str]:
         cleaned = re.sub(r"[^A-Za-z ]", " ", str(name))
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -1180,7 +1389,12 @@ class RuleFieldParserV1:
             "bintang",
             "appstore",
             "google play",
+            "alamat",
+            "address",
         )
+
+        if re.search(r"(^|\s)(jalan|jln|jl)(\s|$)", norm):
+            return True
 
         return any(h in norm for h in noise_hints)
 
@@ -1490,6 +1704,18 @@ class RuleFieldParserV1:
         ordered = self._sorted_lines(lines)
         allow_bifast_tail = template_name != "livin_mandiri"
 
+        if self._is_gopay_merchant_payment_layout(ordered) and not any(
+            self._contains_hint(line.get("text", ""), REFERENCE_ANCHOR_HINTS)
+            for line in ordered
+        ):
+            return None, 0.99
+
+        if self._is_shopee_purchase_payment_layout(ordered) and not any(
+            self._contains_hint(line.get("text", ""), REFERENCE_ANCHOR_HINTS)
+            for line in ordered
+        ):
+            return None, 0.99
+
         # ShopeePay: reference utama berada di "Order SN", sering split multi-line.
         if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
             order_sn = self._extract_shopeepay_order_sn_reference(ordered)
@@ -1503,6 +1729,11 @@ class RuleFieldParserV1:
             hashtag_ref = self._extract_gopay_hashtag_reference(ordered)
             if hashtag_ref:
                 return hashtag_ref, 0.99
+
+        if self._is_btn_layout(ordered) or template_name == "btn":
+            btn_reference = self._extract_btn_reference(ordered)
+            if btn_reference:
+                return btn_reference, 0.99
 
         # DANA special case: ID transaksi sering split multi-line.
         if self._is_dana_layout(ordered) or template_name == "dana":
@@ -1710,6 +1941,24 @@ class RuleFieldParserV1:
     def _extract_account(self, lines: List[Dict], template_name: Optional[str]) -> Tuple[Optional[str], float]:
         ordered = self._sorted_lines(lines)
 
+        if self._is_btn_layout(ordered) or template_name == "btn":
+            return None, 0.99
+
+        if self._is_gopay_merchant_payment_layout(ordered):
+            strong_account_anchors = (
+                "rekening penerima",
+                "nomor rekening",
+                "no rekening",
+                "account number",
+                "destination account",
+                "rekening tujuan",
+            )
+            if not any(self._contains_hint(line.get("text", ""), strong_account_anchors) for line in ordered):
+                return None, 0.99
+
+        if self._is_shopee_purchase_payment_layout(ordered):
+            return None, 0.99
+
         if self._is_shopeepay_layout(ordered) or template_name == "shopeepay":
             # ShopeePay varian ringkas/top-up tidak selalu menampilkan rekening
             # tujuan. Jika konteks penerima tidak ada, paksa null.
@@ -1874,6 +2123,12 @@ class RuleFieldParserV1:
             if not raw:
                 continue
 
+            if any(hint in norm for hint in ("alamat", "address")) or re.search(
+                r"(^|\s)(jalan|jln|jl)(\s|$)",
+                norm,
+            ):
+                continue
+
             if re.search(r"\b(rp|idr)\b", norm):
                 continue
             if is_datetime_like(raw):
@@ -1915,6 +2170,7 @@ class RuleFieldParserV1:
 
     def _extract_name_inline(self, line_text: str) -> Optional[str]:
         patterns = [
+            r"(?i)\bpembayaran\s+ke\s+([A-Za-z][A-Za-z .'-]{2,60})",
             r"(?i)\btransfer\s+ke\s+([A-Za-z][A-Za-z .'-]{2,60})",
             r"(?i)\bkirim\s+uang.*?\bke\s+([A-Za-z][A-Za-z .'-]{2,60})",
             r"(?i)\bkirimuang.*?ke([A-Za-z]{5,30})",
@@ -1933,12 +2189,60 @@ class RuleFieldParserV1:
 
         return None
 
+    def _extract_btn_recipient(self, ordered_lines: List[Dict]) -> Optional[str]:
+        stop_hints = ("terminal", "nominal", "tips", "jumlah", "jenis transaksi", "rekening")
+
+        for idx, line in enumerate(ordered_lines):
+            raw = str(line.get("text", ""))
+            norm = normalize_text(raw)
+            compact = re.sub(r"[^a-z0-9]", "", norm)
+            if ("pembayaran ke" not in norm) and ("pembayaranke" not in compact):
+                continue
+
+            inline = self._extract_name_inline(raw)
+            if inline and is_human_name_candidate(inline):
+                return inline
+
+            tail = re.sub(r"(?i)^.*?pembayaran\s*ke\s*[:\-]?\s*", "", raw)
+            candidate = clean_name_text(tail)
+            if is_human_name_candidate(candidate):
+                return candidate
+
+            for j in range(idx + 1, min(idx + 3, len(ordered_lines))):
+                nxt = str(ordered_lines[j].get("text", ""))
+                nxt_norm = normalize_text(nxt)
+                if any(h in nxt_norm for h in stop_hints):
+                    break
+                candidate = clean_name_text(nxt)
+                if is_human_name_candidate(candidate):
+                    return candidate
+
+        return None
+
     def _extract_name(self, lines: List[Dict], account_no: Optional[str], template_name: Optional[str]) -> Tuple[Optional[str], float]:
         ordered = self._sorted_lines(lines)
         account_line_indexes = [
             idx for idx, line in enumerate(ordered)
             if 8 <= len(normalize_number(line.get("text", ""))) <= 16
         ]
+
+        if self._is_btn_layout(ordered) or template_name == "btn":
+            btn_recipient = self._extract_btn_recipient(ordered)
+            if btn_recipient:
+                return self._normalize_recipient_name_case(btn_recipient), 0.96
+            return None, 0.99
+
+        if self._is_gopay_merchant_payment_layout(ordered):
+            merchant_name = self._extract_gopay_merchant_payment_recipient(ordered)
+            if merchant_name:
+                return self._normalize_recipient_name_case(merchant_name), 0.96
+            return None, 0.99
+
+        if self._is_shopee_purchase_payment_layout(ordered):
+            recipient = self._extract_shopee_purchase_recipient(ordered)
+            if recipient:
+                return self._normalize_recipient_name_case(recipient), 0.94
+            return None, 0.99
 
         if self._is_dana_layout(ordered) or template_name == "dana":
             for idx, line in enumerate(ordered):
@@ -2539,7 +2843,11 @@ class RuleFieldParserV1:
         reference_no = self.resolve_reference_with_lexicon(reference_no)
 
         # Infer rekening dari nama jika rekening tidak terbaca tapi nama kuat.
-        if (not account_no or account_score < 0.72) and recipient_name:
+        account_needs_inference = (
+            (account_no is None and account_score < 0.95)
+            or (account_no is not None and account_score < 0.72)
+        )
+        if account_needs_inference and recipient_name:
             recipient_key = re.sub(r"[^a-z]", "", recipient_name.lower())
             mapped_account = self.recipient_account_map.get(recipient_key)
             if mapped_account:
