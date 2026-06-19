@@ -2,7 +2,7 @@
 
 Dokumentasi ini merangkum arsitektur, alur inference, rule parser updates terbaru, hasil evaluasi komprehensif, refactoring mendalam, dan visualisasi insightful untuk ekstraksi field dari bukti transfer/receipt.
 
-Status terkini per **30 Mei 2026**:
+Status terkini per **19 Juni 2026**:
 
 - **Supervised Accuracy**: Mencapai **100% overall accuracy** pada 100 labeled samples dengan 0 miss dan 0 wrong extractions.
 - **Full Corpus Evaluation**: 7,008 images evaluated dengan mean latency **0.836s** (69.4% under 1 second).
